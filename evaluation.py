@@ -286,7 +286,10 @@ def main():
         suffix += "_zero"
     method = args.unlearn_method + suffix
     
-    if args.unlearn_method == "pre_train" or "CMF_FT" in args.unlearn_method:
+    if args.save_path:
+        # Explicit override from caller (e.g. notebook with mode-tagged paths)
+        ckpt_path = args.save_path
+    elif args.unlearn_method == "pre_train" or "CMF_FT" in args.unlearn_method:
         ckpt_path = f"./checkpoints/{args.unlearn_method}/{args.dataset}_{args.arch}.pt"
     else:
         ckpt_path = f"./checkpoints/{method}/{args.dataset}_{args.arch}/{','.join([str(v) for v in args.unlearn_class])}.pt"

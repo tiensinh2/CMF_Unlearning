@@ -718,7 +718,10 @@ def test(model, device, data_loader,  unlearn_class_list, class_label_names, num
     if plot_cm:
         fig,ax = plt.subplots()
         fig.set_size_inches(10,10)
-        plt.style.use("seaborn-talk")
+        try:
+            plt.style.use("seaborn-v0_8-talk")   # matplotlib >= 3.6 renamed seaborn styles
+        except OSError:
+            plt.style.use("seaborn-talk")         # matplotlib < 3.6 fallback
         cs = sns.color_palette("muted")
         short_labels = []
         for label in class_label_names:
