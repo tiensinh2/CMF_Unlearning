@@ -81,12 +81,6 @@ def ablation_naive_CMF(
     """
     from utils import test, get_model
 
-    # Fresh SGD (same hyperparams as production)
-    optimizer = optim.SGD(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=args.lr, momentum=args.momentum,
-        weight_decay=args.weight_decay, nesterov=True
-    )
     clip = getattr(args, "grad_norm_clip", None)
 
     # Subsample forget / retain training subsets (same sizes as production)
@@ -243,11 +237,6 @@ def ablation_random_label_CMF(
     num_classes   = args.num_classes
     forget_classes = set(args.unlearn_class)
 
-    optimizer = optim.SGD(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=args.lr, momentum=args.momentum,
-        weight_decay=args.weight_decay, nesterov=True
-    )
     clip = getattr(args, "grad_norm_clip", None)
 
     # Fixed mixed subset
@@ -415,13 +404,8 @@ def ablation_salun_CMF(
     num_classes    = args.num_classes
     forget_classes = set(args.unlearn_class)
 
-    optimizer = optim.SGD(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=args.lr, momentum=args.momentum,
-        weight_decay=args.weight_decay, nesterov=True
-    )
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.2)
     clip = getattr(args, "grad_norm_clip", None)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.2)
 
     # ---- Epoch 0: align + baseline ----
     model.eval()
