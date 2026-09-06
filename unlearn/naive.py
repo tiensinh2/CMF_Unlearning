@@ -343,12 +343,18 @@ def unlearn_naive_CMF(
         print("model device:", next(model.parameters()).device)
         
         epoch_start = time.time()
-        starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+        # Only create CUDA timing events if we actually have a CUDA device.
+        # Unconditional torch.cuda.Event() crashes on CPU-only machines.
+        use_cuda_timing = (device.type == "cuda")
+        if use_cuda_timing:
+            starter = torch.cuda.Event(enable_timing=True)
+            ender   = torch.cuda.Event(enable_timing=True)
         for i, (x,y) in enumerate(naive_retain_loader):
             
             x, y = x.to(device), y.to(device)
 
-            starter.record()
+            if use_cuda_timing:
+                starter.record()
             optimizer.zero_grad()
             
             #print("Get fixed CMF weights")
@@ -409,11 +415,15 @@ def unlearn_naive_CMF(
             if clip is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             optimizer.step()
-            ender.record()
+            if use_cuda_timing:
+                ender.record()
             if i % 50 == 0:
-                torch.cuda.synchronize()
-                ms = starter.elapsed_time(ender)  # GPU compute ms
-                print(f"i={i} loss={total_loss_item:.4f} gpu_step_ms={ms:.1f}")
+                if use_cuda_timing:
+                    torch.cuda.synchronize()
+                    ms = starter.elapsed_time(ender)
+                    print(f"i={i} loss={total_loss_item:.4f} gpu_step_ms={ms:.1f}")
+                else:
+                    print(f"i={i} loss={total_loss_item:.4f}")
 
         epoch_end = time.time()
         print(f"[Epoch {epoch}] wall time: {epoch_end - epoch_start:.1f}s")

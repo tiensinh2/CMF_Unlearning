@@ -18,16 +18,37 @@ ENV/
 .DS_Store
 .env
 
-# Large model checkpoints
+# Large model checkpoints (never commit .pt weights)
 *.pt
-checkpoints/
 *.pth
 *.bin
+checkpoints/
+archive_stale_shell_hparams/
 
-# Data
+# Data downloads
 data/
-*.csv
-*.json
+
+# Result tables (generated artifacts -- large xlsx / png)
+notebooks/Result_nb1/
+notebooks/Result_nb2/
+notebooks/Result_nb3/
+notebooks/Result_nb4/
+
+# Debug / scratch files
+_dump_dyn.py
+_nb4_dyn.txt
+
+# Generated HTML reports
+*.html
 
 # Logs
 *.log
+
+# CSV / JSON result files (generated; load from checkpoints instead)
+*.csv
+*.json
+
+# Kaggle notebook executed copies
+*_testmode_run.ipynb
+*_fullrun_run.ipynb
+*_executed.ipynb

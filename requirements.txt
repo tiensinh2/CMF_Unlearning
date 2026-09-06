@@ -1,0 +1,38 @@
+# ============================================================
+# CMF_Unlearning — dependency file
+# Paper environment: Python 3.11, PyTorch 2.5.1, CUDA 12.1
+# (Ubuntu 20.04, 8× NVIDIA RTX A5000 24 GB)
+#
+# For CUDA 12.1 GPU install, replace the torch/torchvision/
+# torchaudio lines with the CUDA wheel index at the bottom.
+# For CPU-only (e.g. this Windows dev machine) leave as-is.
+# ============================================================
+
+# ----- Core deep-learning stack (paper: PyTorch 2.5.1) -----
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+
+# ----- Vision / model zoo -----
+timm>=0.9.12             # ViT-S/16 backbone (used in utils.py)
+
+# ----- Scientific computing -----
+numpy>=1.24,<3.0
+scipy>=1.11
+
+# ----- ML utilities -----
+scikit-learn>=1.3        # SVC_MIA, linear probe (utils.py)
+
+# ----- Data / visualisation -----
+pandas>=1.5
+matplotlib>=3.7
+seaborn>=0.12
+
+# ----- Progress / logging -----
+tqdm>=4.65
+
+# ----- PyTorch-Lightning stack (used by ModelModule) -----
+pytorch-lightning>=2.0
+lightning>=2.0
+lightning-utilities>=0.9
+torchmetrics>=1.0
