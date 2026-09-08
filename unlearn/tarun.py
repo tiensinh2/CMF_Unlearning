@@ -34,11 +34,11 @@ def tarun_CMF_unlearn(args, model, device, retain_loader, forget_loader, train_l
     repair_lr = args.lr
     index_list = []
     targets = np.array(train_dataset.targets)
+    val_index_arr = np.array(val_index) if val_index is not None else np.arange(len(targets))
     forget_set = set(args.unlearn_class)
     for i in range(args.num_classes):
-        #if i != args.unlearn_class[0]:
         if i not in forget_set:
-            class_i_index = np.intersect1d(np.where(i == targets)[0], val_index)
+            class_i_index = np.intersect1d(np.where(i == targets)[0], val_index_arr)
             index_list.extend(class_i_index[:int(args.tarun_samples_per_class)])
     small_retain_loader = torch.utils.data.DataLoader(
         torch.utils.data.Subset(train_dataset, index_list), batch_size=batch_size, shuffle=True
@@ -175,11 +175,11 @@ def tarun_unlearn(args, model, device, retain_loader, forget_loader, train_loade
     repair_lr = args.lr
     index_list = []
     targets = np.array(train_dataset.targets)
+    val_index_arr = np.array(val_index) if val_index is not None else np.arange(len(targets))
     forget_set = set(args.unlearn_class)
     for i in range(args.num_classes):
-        #if i != args.unlearn_class[0]:
         if i not in forget_set:
-            class_i_index = np.intersect1d(np.where(i == targets)[0], val_index)
+            class_i_index = np.intersect1d(np.where(i == targets)[0], val_index_arr)
             index_list.extend(class_i_index[:int(args.tarun_samples_per_class)])
     small_retain_loader = torch.utils.data.DataLoader(
         torch.utils.data.Subset(train_dataset, index_list), batch_size=batch_size, shuffle=True

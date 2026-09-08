@@ -41,10 +41,15 @@ def SVD_unlearn(args, model, device, retain_loader, forget_loader, train_loader,
     model.eval()
     index_list = []
     targets = np.array(train_dataset.targets)
+    val_index_arr = np.array(val_index) if val_index is not None else np.arange(len(targets))
+    # Support both whole-class removal (unlearn_class=[c]) and stratified splits (unlearn_class=[])
+    forget_set = set(args.unlearn_class)
+    n_retain_classes = args.num_classes - len(forget_set) if forget_set else args.num_classes
+    samples_per_class = int(args.SVD_samples // max(n_retain_classes, 1))
     for i in range(args.num_classes):
-        if i != args.unlearn_class[0]:
-            class_i_index = np.intersect1d(np.where(i == targets)[0], val_index)
-            index_list.extend(class_i_index[:int(args.SVD_samples // (args.num_classes - 1))])
+        if i not in forget_set:
+            class_i_index = np.intersect1d(np.where(i == targets)[0], val_index_arr)
+            index_list.extend(class_i_index[:samples_per_class])
     small_retain_loader = torch.utils.data.DataLoader(
         torch.utils.data.Subset(train_dataset, index_list), batch_size=args.SVD_samples, shuffle=True
     )
