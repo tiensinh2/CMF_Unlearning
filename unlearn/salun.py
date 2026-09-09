@@ -98,7 +98,8 @@ def salun_unlearn(
     )
 
     valid = [c for c in range(num_classes) if c not in forget_classes]
-    choices = torch.tensor(valid, device=device)
+    all_classes = torch.arange(num_classes, device=device)
+    choices = torch.tensor(valid, device=device) if valid else None
 
     # ---------- Logs ----------
     retain_acc_list, forget_acc_list = [], []
@@ -154,9 +155,16 @@ def salun_unlearn(
                 forget_mask |= (target == cls)
 
             if forget_mask.any():
-                n_forget = int(forget_mask.sum().item())
-                rand = choices[torch.randint(0, len(valid), (n_forget,), device=device)]
-                target[forget_mask] = rand
+                idx_forget = forget_mask.nonzero(as_tuple=True)[0]
+                if choices is not None:
+                    rand = choices[torch.randint(0, len(valid), (len(idx_forget),), device=device)]
+                else:
+                    true_lbls = target[idx_forget]
+                    rand = torch.zeros_like(true_lbls)
+                    for k in range(len(true_lbls)):
+                        other = all_classes[all_classes != true_lbls[k]]
+                        rand[k] = other[torch.randint(0, len(other), (1,)).item()]
+                target[idx_forget] = rand
 
             optimizer.zero_grad(set_to_none=True)
             output = model(data)                         # logits

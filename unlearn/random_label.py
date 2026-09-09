@@ -849,7 +849,10 @@ def random_label_unlearn(args, model, device,
     forget_classes = set(args.unlearn_class)
 
     valid = [c for c in range(num_classes) if c not in forget_classes]
-    choices = torch.tensor(valid, device=device)
+    # For stratified splits all classes are in forget_classes → valid=[] → fall back to
+    # relabeling each sample to a random class different from its true label.
+    all_classes = torch.arange(num_classes, device=device)
+    choices = torch.tensor(valid, device=device) if valid else None
 
 
     retain_acc_list, forget_acc_list = [], []
@@ -940,7 +943,15 @@ def random_label_unlearn(args, model, device,
                 forget_mask |= (labels == cls)
             idx_forget = forget_mask.nonzero(as_tuple=True)[0]
             if idx_forget.numel():
-                rand = choices[torch.randint(0, len(valid), (idx_forget.numel(),), device=device)]
+                if choices is not None:
+                    rand = choices[torch.randint(0, len(valid), (idx_forget.numel(),), device=device)]
+                else:
+                    # Stratified: relabel to any class != true label
+                    true_lbls = labels[idx_forget]
+                    rand = torch.zeros_like(true_lbls)
+                    for k in range(len(true_lbls)):
+                        other = all_classes[all_classes != true_lbls[k]]
+                        rand[k] = other[torch.randint(0, len(other), (1,)).item()]
                 labels[idx_forget] = rand
             optimizer.zero_grad()
             logits = model(inputs)

@@ -32,12 +32,21 @@ def tarun_CMF_unlearn(args, model, device, retain_loader, forget_loader, train_l
     batch_size = args.batch_size
     impair_lr = args.tarun_impair_lr
     repair_lr = args.lr
-    index_list = []
     targets = np.array(train_dataset.targets)
     val_index_arr = np.array(val_index) if val_index is not None else np.arange(len(targets))
     forget_set = set(args.unlearn_class)
-    for i in range(args.num_classes):
-        if i not in forget_set:
+    # For whole-class removal: only retain-class samples. For stratified (forget_set==all
+    # classes), val_index_arr already contains only retain samples — use all of them.
+    retain_classes = [i for i in range(args.num_classes) if i not in forget_set]
+    if retain_classes:
+        index_list = []
+        for i in retain_classes:
+            class_i_index = np.intersect1d(np.where(i == targets)[0], val_index_arr)
+            index_list.extend(class_i_index[:int(args.tarun_samples_per_class)])
+    else:
+        # Stratified split: every class has retain samples in val_index_arr
+        index_list = []
+        for i in range(args.num_classes):
             class_i_index = np.intersect1d(np.where(i == targets)[0], val_index_arr)
             index_list.extend(class_i_index[:int(args.tarun_samples_per_class)])
     small_retain_loader = torch.utils.data.DataLoader(
@@ -173,12 +182,18 @@ def tarun_unlearn(args, model, device, retain_loader, forget_loader, train_loade
     batch_size = args.batch_size
     impair_lr = args.tarun_impair_lr
     repair_lr = args.lr
-    index_list = []
     targets = np.array(train_dataset.targets)
     val_index_arr = np.array(val_index) if val_index is not None else np.arange(len(targets))
     forget_set = set(args.unlearn_class)
-    for i in range(args.num_classes):
-        if i not in forget_set:
+    retain_classes = [i for i in range(args.num_classes) if i not in forget_set]
+    if retain_classes:
+        index_list = []
+        for i in retain_classes:
+            class_i_index = np.intersect1d(np.where(i == targets)[0], val_index_arr)
+            index_list.extend(class_i_index[:int(args.tarun_samples_per_class)])
+    else:
+        index_list = []
+        for i in range(args.num_classes):
             class_i_index = np.intersect1d(np.where(i == targets)[0], val_index_arr)
             index_list.extend(class_i_index[:int(args.tarun_samples_per_class)])
     small_retain_loader = torch.utils.data.DataLoader(

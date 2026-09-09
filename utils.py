@@ -712,8 +712,10 @@ def test(model, device, data_loader,  unlearn_class_list, class_label_names, num
         forget_acc = 0
         forget_loss = 0
         unlearn_class_name = []
-    retain_acc = sum([float(val) for i, val in enumerate(cm.diagonal()) if i not in unlearn_class_list])/ sum([float(val)  for i, val in enumerate(cm.sum(axis=1)) if i not in unlearn_class_list])
-    retain_loss = sum([float(dict_classwise_loss[key]) for key in dict_classwise_loss if key not in unlearn_class_list])/ sum([float(val) for i, val in enumerate(cm.sum(axis=1)) if i not in unlearn_class_list])
+    _retain_denom = sum([float(val) for i, val in enumerate(cm.sum(axis=1)) if i not in unlearn_class_list])
+    _retain_loss_denom = sum([float(val) for i, val in enumerate(cm.sum(axis=1)) if i not in unlearn_class_list])
+    retain_acc  = sum([float(val) for i, val in enumerate(cm.diagonal()) if i not in unlearn_class_list]) / _retain_denom if _retain_denom > 0 else 0.0
+    retain_loss = sum([float(dict_classwise_loss[key]) for key in dict_classwise_loss if key not in unlearn_class_list]) / _retain_loss_denom if _retain_loss_denom > 0 else 0.0
     metric = metric_function(retain_acc,forget_acc)
     if plot_cm:
         fig,ax = plt.subplots()

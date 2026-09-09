@@ -39,17 +39,19 @@ def SVD_unlearn(args, model, device, retain_loader, forget_loader, train_loader,
     from unlearn.tools import maybe_eval_and_save
     from utils import test
     model.eval()
-    index_list = []
     targets = np.array(train_dataset.targets)
     val_index_arr = np.array(val_index) if val_index is not None else np.arange(len(targets))
-    # Support both whole-class removal (unlearn_class=[c]) and stratified splits (unlearn_class=[])
     forget_set = set(args.unlearn_class)
-    n_retain_classes = args.num_classes - len(forget_set) if forget_set else args.num_classes
-    samples_per_class = int(args.SVD_samples // max(n_retain_classes, 1))
-    for i in range(args.num_classes):
-        if i not in forget_set:
-            class_i_index = np.intersect1d(np.where(i == targets)[0], val_index_arr)
-            index_list.extend(class_i_index[:samples_per_class])
+    retain_classes = [i for i in range(args.num_classes) if i not in forget_set]
+    # For whole-class removal: use only retain-class samples from val_index_arr.
+    # For stratified (forget_set == all classes): every class has retain samples in val_index_arr.
+    sample_classes = retain_classes if retain_classes else list(range(args.num_classes))
+    n_sample_classes = max(len(sample_classes), 1)
+    samples_per_class = int(args.SVD_samples // n_sample_classes)
+    index_list = []
+    for i in sample_classes:
+        class_i_index = np.intersect1d(np.where(i == targets)[0], val_index_arr)
+        index_list.extend(class_i_index[:samples_per_class])
     small_retain_loader = torch.utils.data.DataLoader(
         torch.utils.data.Subset(train_dataset, index_list), batch_size=args.SVD_samples, shuffle=True
     )
