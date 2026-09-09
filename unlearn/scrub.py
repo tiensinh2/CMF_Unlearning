@@ -455,13 +455,12 @@ def scrub_unlearn(
         raise ValueError(f"Unsupported args.optim: {args.optim}")
 
     # ---- Device ----
+    module_list.to(device)
+    criterion_list.to(device)
+    swa_model.to(device)
     if torch.cuda.is_available():
-        module_list.cuda()
-        criterion_list.cuda()
         import torch.backends.cudnn as cudnn
-
         cudnn.benchmark = True
-        swa_model.cuda()
 
     
 
@@ -475,8 +474,6 @@ def scrub_unlearn(
     )
     retain_acc_list.append(retain_acc)
     forget_acc_list.append(forget_acc)
-
-    model_s.train()
 
     model_s.eval()
     # ---- SGDA loop ----

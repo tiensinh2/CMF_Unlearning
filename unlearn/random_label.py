@@ -649,7 +649,7 @@ def random_label_unlearn_iter_eval(args, model, device,
 
             optimizer.zero_grad()
             logits = model(inputs)
-            loss = F.nll_loss(logits, labels)
+            loss = F.cross_entropy(logits, labels)
             loss.backward()
             optimizer.step()
 
@@ -751,17 +751,18 @@ def random_label_unlearn_iter_eval(args, model, device,
     return model
 
 
+@apply_prep
 def random_label_once(args, model, device,
                       retain_loader, forget_loader,
                       train_loader, test_loader,
                       optimizer, epochs, test_forget_loader, **kwargs):
     from unlearn.tools import maybe_eval_and_save
     # Random relabeling
-    
+
     forget_dataset = copy.deepcopy(forget_loader.dataset)
     old_labels = np.array(forget_dataset.labels)
     valid = [c for c in range(args.num_classes) if c not in args.unlearn_class]
-    rand_choice = torch.randint(0, len(valid), size=len(forget_dataset))
+    rand_choice = torch.randint(0, len(valid), size=(len(forget_dataset),))
     new_labels = [valid[i] for i in rand_choice]
     forget_dataset.update_labels(new_labels)
     
@@ -790,7 +791,7 @@ def random_label_once(args, model, device,
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
             logits = model(inputs)
-            loss = F.nll_loss(logits, labels)
+            loss = F.cross_entropy(logits, labels)
             loss.backward()
             optimizer.step()
             if args.dry_run:
@@ -955,7 +956,7 @@ def random_label_unlearn(args, model, device,
                 labels[idx_forget] = rand
             optimizer.zero_grad()
             logits = model(inputs)
-            loss = F.nll_loss(logits, labels)
+            loss = F.cross_entropy(logits, labels)
             loss.backward()
             optimizer.step()
             if args.dry_run:
@@ -1103,7 +1104,7 @@ def re_train(args, model, device,
                 labels[idx_forget] = rand
             optimizer.zero_grad()
             logits = model(inputs)
-            loss = F.nll_loss(logits, labels)
+            loss = F.cross_entropy(logits, labels)
             loss.backward()
             train_loss += loss.detach().item()
             optimizer.step()

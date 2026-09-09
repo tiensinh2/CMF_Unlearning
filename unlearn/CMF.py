@@ -105,13 +105,14 @@ def CMF_fine_tuing(
     # Step 6: Final Evaluation
     print("[After Fine-tuning] Testing CMF model")
     model.recompute_cmf(train_loader, device=device)
-    test(
-        #new_model, device, test_loader,
+    retain_acc, forget_acc, _ = test(
         model, device, test_loader,
         args.unlearn_class, args.class_label_names, args.num_classes,
         job_name=args.unlearn_method, set_name="Test Set (After Fine-tune)"
     )
-
-    #return new_model
+    model.history_log = {
+        "retain_acc": [retain_acc],
+        "forget_acc": [forget_acc],
+    }
     return model
 

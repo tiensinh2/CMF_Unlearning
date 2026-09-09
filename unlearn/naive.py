@@ -289,6 +289,9 @@ def unlearn_naive_CMF(
     margin     = getattr(args, "forget_margin",    0.0)
     beta_m     = getattr(args, "beta_margin",      0.0)
 
+    # bs_probe defined here so both baseline and epoch-loop LP can use it
+    bs_probe = getattr(args, "prob_batch_size", getattr(args, "probe_batch_size", 256))
+
     # -------------------------
     # Logs (start from epoch 0)
     # -------------------------
@@ -317,7 +320,6 @@ def unlearn_naive_CMF(
     lp_every = getattr(args, "lp_every", 1)  # set 0 to disable LP entirely
     if lp_every != 0:
         print("[LP] Running linear probe at epoch 0...")
-        bs_probe = getattr(args, "prob_batch_size", getattr(args, "probe_batch_size", 256))
         outs_LP = evaluation.run_linear_probe_on_fresh_clone(
             args=args,
             get_model_fn=get_model,

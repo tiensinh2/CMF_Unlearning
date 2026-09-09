@@ -9,7 +9,7 @@ def calc_importance(model, device, optimizer, dataloader):
         x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
         out = model(x)
-        loss = F.nll_loss(out, y)
+        loss = F.cross_entropy(out, y)
         loss.backward()
         for (k1, p), (k2, imp) in zip(model.named_parameters(), importances.items()):
             if p.grad is not None:
@@ -21,6 +21,7 @@ def calc_importance(model, device, optimizer, dataloader):
 
 def ssd_unlearn(args, model, device, retain_loader, forget_loader, train_loader, test_loader, optimizer, **kwargs):
     from unlearn.tools import maybe_eval_and_save
+    from utils import test
     forget_dataset = forget_loader.dataset
     forget_dataset, _ = torch.utils.data.random_split(
         forget_dataset, [args.num_forget_samples, len(forget_dataset) - args.num_forget_samples]
@@ -50,4 +51,13 @@ def ssd_unlearn(args, model, device, retain_loader, forget_loader, train_loader,
             min_locs = torch.where(update > lower_bound)
             update[min_locs] = lower_bound
             p[locations] = p[locations].mul(update)
+    retain_acc, forget_acc, _ = test(
+        model, device, test_loader,
+        args.unlearn_class, args.class_label_names, args.num_classes,
+        job_name=args.unlearn_method, set_name="Test Set"
+    )
+    model.history_log = {
+        "retain_acc": [retain_acc],
+        "forget_acc": [forget_acc],
+    }
     return model

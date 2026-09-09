@@ -23,8 +23,8 @@ def get_salun_mask(args, model, device, forget_loader):
 
         model.zero_grad(set_to_none=True)
         with torch.enable_grad():
-            output = model(data)                          # passis log-probs
-            loss = F.nll_loss(output, target, reduction='sum')  # andyouoriginalconsistent
+            output = model(data)                          # logits
+            loss = F.cross_entropy(output, target, reduction='sum')
         loss.backward()
 
         with torch.no_grad():
@@ -168,7 +168,7 @@ def salun_unlearn(
 
             optimizer.zero_grad(set_to_none=True)
             output = model(data)                         # logits
-            loss = F.nll_loss(output, target)       # CE fits logits
+            loss = F.cross_entropy(output, target)
             loss.backward()
 
             # Apply SALUN mask to grads (element-wise)

@@ -77,7 +77,7 @@ def tarun_CMF_unlearn(args, model, device, retain_loader, forget_loader, train_l
                 inputs = noises[cls_num]()
                 labels = torch.zeros(batch_size, device=device).long() + cls_num
                 outputs = model(inputs)
-                loss = -F.nll_loss(outputs, labels) + 0.1 * torch.mean(torch.sum(inputs.square(), dim=[1, 2, 3]))
+                loss = -F.cross_entropy(outputs, labels) + 0.1 * torch.mean(torch.sum(inputs.square(), dim=[1, 2, 3]))
                 opt.zero_grad(); loss.backward(); opt.step()
                 total_loss.append(loss.cpu().item())
             print(f"Loss: {np.mean(total_loss)}")
@@ -175,7 +175,6 @@ def tarun_CMF_unlearn(args, model, device, retain_loader, forget_loader, train_l
 
 
 
-@apply_prep
 def tarun_unlearn(args, model, device, retain_loader, forget_loader, train_loader, test_loader, train_dataset, val_index=None, **kwargs):
     from unlearn.tools import maybe_eval_and_save
     from utils import test
@@ -211,6 +210,8 @@ def tarun_unlearn(args, model, device, retain_loader, forget_loader, train_loade
                 noises[cls_num] = Noise(batch_size, 3, 224, 224).to(device)
             elif is_resnet:
                 noises[cls_num] = Noise(batch_size, 3, 64, 64).to(device)
+            else:
+                noises[cls_num] = Noise(batch_size, 3, 32, 32).to(device)
         elif "imagenet" in args.dataset:
             noises[cls_num] = Noise(batch_size, 3, 224, 224).to(device)
         else:
@@ -222,7 +223,7 @@ def tarun_unlearn(args, model, device, retain_loader, forget_loader, train_loade
                 inputs = noises[cls_num]()
                 labels = torch.zeros(batch_size, device=device).long() + cls_num
                 outputs = model(inputs)
-                loss = -F.nll_loss(outputs, labels) + 0.1 * torch.mean(torch.sum(inputs.square(), dim=[1, 2, 3]))
+                loss = -F.cross_entropy(outputs, labels) + 0.1 * torch.mean(torch.sum(inputs.square(), dim=[1, 2, 3]))
                 opt.zero_grad(); loss.backward(); opt.step()
                 total_loss.append(loss.cpu().item())
             print(f"Loss: {np.mean(total_loss)}")
@@ -248,7 +249,7 @@ def tarun_unlearn(args, model, device, retain_loader, forget_loader, train_loade
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(inputs)
-            loss = F.nll_loss(outputs, labels)
+            loss = F.cross_entropy(outputs, labels)
             loss.backward(); optimizer.step()
             running_loss += loss.item() * inputs.size(0)
             out = outputs.argmax(dim=1)
@@ -274,7 +275,7 @@ def tarun_unlearn(args, model, device, retain_loader, forget_loader, train_loade
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(inputs)
-            loss = F.nll_loss(outputs, labels)
+            loss = F.cross_entropy(outputs, labels)
             loss.backward(); optimizer.step()
             running_loss += loss.item() * inputs.size(0)
             out = outputs.argmax(dim=1)

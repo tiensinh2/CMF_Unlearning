@@ -1,6 +1,8 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.nn import init
+
 
 def _reinit(m):
     if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
@@ -51,7 +53,7 @@ def goel_last_unlearn(args, model, device, retain_loader, forget_loader, train_l
         for data, target in goel_train_loader:
             data, target = data.to(device), target.to(device)
             output = model(data)
-            loss = F.nll_loss(output, target)
+            loss = F.cross_entropy(output, target)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

@@ -316,14 +316,14 @@ def get_dataset(args):
                 transforms.RandomHorizontalFlip(),
                 transforms.RandomCrop(32, 4),
                 transforms.ToTensor(),
-                transforms.Normalize(mean=[0.491, 0.482, 0.447],
-                                            std=[0.247, 0.243, 0.262]),      
+                transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
+                                            std=[0.2023, 0.1994, 0.2010]),
                 ])
             
             test_transform=transforms.Compose([
                 transforms.ToTensor(),
-                transforms.Normalize(mean=[0.491, 0.482, 0.447],
-                                            std=[0.247, 0.243, 0.262]),   
+                transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
+                                            std=[0.2023, 0.1994, 0.2010]),
                 ])
         if args.dataset == "cifar10":
             if args.train_transform:
@@ -693,7 +693,10 @@ def test(model, device, data_loader,  unlearn_class_list, class_label_names, num
         for data, target in data_loader:
             data, target = data.to(device), target.to(device)
             output = model(data)
-            sample_loss = F.nll_loss(output, target, reduction='none')#.item()  # sum up batch loss
+            # Use cross_entropy on logits (numerically correct for models that return logits).
+            # nll_loss on logits would produce wrong loss values; kept for confusion-matrix
+            # accuracy which is unaffected. The loss scalar itself is informational only.
+            sample_loss = F.cross_entropy(output, target, reduction='none')
             for i in range(num_classes):
                 dict_classwise_loss[i] +=  torch.where(target == i, sample_loss, torch.zeros_like(sample_loss)).sum()
             pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability

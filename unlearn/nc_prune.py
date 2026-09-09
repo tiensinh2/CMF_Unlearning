@@ -49,10 +49,14 @@ def prune(args, model, device,
                 module.bias.data[cls].zero_()
 
     print(f"[nc_prune] Zeroed out final Linear '{name}' rows for classes {forget_classes}")
-    test(model, device, test_loader,
+    retain_acc, forget_acc, _ = test(model, device, test_loader,
          args.unlearn_class, args.class_label_names, args.num_classes,
          job_name=args.unlearn_method, set_name="Test Set")
     test(model, device, train_loader,
          args.unlearn_class, args.class_label_names, args.num_classes,
-         job_name=args.unlearn_method, set_name="Test Set")
+         job_name=args.unlearn_method, set_name="Train Set")
+    model.history_log = {
+        "retain_acc": [retain_acc],
+        "forget_acc": [forget_acc],
+    }
     return model
