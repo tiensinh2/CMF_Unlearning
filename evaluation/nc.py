@@ -343,6 +343,7 @@ def nc_metrics(
     retain_classes: List[int],
     forget_classes: List[int],
     *,
+    train_loader=None,
     args=None,
     pool_mode: str = "avg",
 ) -> Dict:
@@ -350,6 +351,14 @@ def nc_metrics(
 
     Uses get_classifier_weights() so CMF models get the correct W.
     Uses _features_for_nc() so CMF models get the correct ẑ geometry.
+
+    Args:
+        loader:       Eval loader (test set).  Features extracted from here
+                      are used for NC-3 and as the *evaluation* side of NCC.
+        train_loader: Optional.  When provided, class-mean centres μ_k for NCC
+                      are computed from this loader (matching the paper protocol:
+                      centres from train, accuracy evaluated on test).
+                      When None, centres fall back to *loader* (self-evaluation).
     """
     device = device if isinstance(device, torch.device) else torch.device(device)
     all_classes = sorted(set(retain_classes) | set(forget_classes))
@@ -365,16 +374,26 @@ def nc_metrics(
     # Correct classifier weights
     W = get_classifier_weights(model, num_classes, device)  # [C, D]
 
-    # Features
+    # Eval-set features (used for NC-3 and as NCC evaluation split)
     X, y = _features_for_nc(model, loader, device, use_cmf=use_cmf, pool_mode=pool_mode)
     X, y = X.to(device), y.to(device)
 
-    # --- NC-3 duality distance ---
+    # --- NC-3 duality distance (computed on eval-set features) ---
     mu_G, mu_c = _compute_mu_G_and_mu_c(X, y)
     h_norm, w_norm, nc3_dist = duality_distance(mu_c, mu_G, W)
 
     # --- NCC (NC-4) ---
-    ncc_all, ncc_per_class = ncc_accuracy_from_features(X, y, X, y, num_classes)
+    # Paper protocol: centres from training data, accuracy on eval (test) data.
+    # When train_loader is supplied we compute train-set centres; otherwise we
+    # fall back to using eval-set centres (self-evaluation).
+    if train_loader is not None:
+        X_tr, y_tr = _features_for_nc(
+            model, train_loader, device, use_cmf=use_cmf, pool_mode=pool_mode
+        )
+        X_tr, y_tr = X_tr.to(device), y_tr.to(device)
+    else:
+        X_tr, y_tr = X, y  # fallback: self-evaluation (original behaviour)
+    ncc_all, ncc_per_class = ncc_accuracy_from_features(X_tr, y_tr, X, y, num_classes)
 
     # --- NC-1 / NC-2 (legacy, on all classes) ---
     try:

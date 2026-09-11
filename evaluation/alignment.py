@@ -312,33 +312,6 @@ def grouped_nc3(
     if NC3_f is not None: num += K_f * NC3_f; den += K_f
     NC3_group = float(num/den) if den > 0 else None
 
-    # get retain class C_r（you grouped_nc3 inhave）
-    W = W_full[C_r].detach().cpu()       # [K_r, d]
-    H = H_r.detach().cpu()               # [K_r, d]  line/executesinglepositionify（byyouractually/real）
-
-    # 1) weightline/executebetweendegree（is ~1）
-    print(W.shape, H.shape)
-    W_cos = F.normalize(W, dim=1) @ F.normalize(W, dim=1).T
-    print("W_cos.shape", W_cos.shape)
-    print("mean offdiag cos(W_r rows):", W_cos)
-
-    # 2) H line/executebetween（is ~1）
-    H_cos = H @ H.T
-    print("H_cos.shape", H_cos.shape)
-    print("mean offdiag cos(H_r rows):", H_cos)
-
-    # 3) W 's/of
-    print("rank(W_r):", torch.linalg.matrix_rank(W).item())
-
-    # 4) A do Fro normoneifybeforeis-1
-    A0 = (W @ H.T).cpu()
-    print("rank(W_r @ H_r^T):", torch.linalg.matrix_rank(A0).item())
-
-    # 5) W line/executenumberseparate
-    print("||W_r|| (min/mean/max):",
-        W.norm(dim=1).min().item(), W.norm(dim=1).mean().item(), W.norm(dim=1).max().item())
-
-
     return dict(
         head=head_name, used_feature_from=used,
         feature_dim=d, K_total=K_total, K_r=K_r, K_f=K_f,

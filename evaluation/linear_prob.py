@@ -365,14 +365,11 @@ def unified_linear_probe(args, model, train_loader, test_loader,
     #    Xtr = F.normalize(Xtr, dim=1)
     #    Xte = F.normalize(Xte, dim=1)
 
-    # ---- Tiny use（not CIFAR ）----
-    #lp_lr         = 0.1  if is_tiny or is_cifar100 else getattr(args, "lr", 0.01)
-    #lp_wd         = 1e-4  if is_tiny or is_cifar100 else getattr(args, "weight_decay", 0.0)
-    lp_lr         = 0.01 
-    #lp_wd         = 1e-4  if is_tiny or is_cifar100 else getattr(args, "weight_decay", 0.0)
-    lp_patience   = 40    
-    lp_max_epochs =150   if (is_tiny or is_cifar100) else 20 if is_cifar10 else getattr(args, "max_epochs", 200)
-    lp_val_ratio  = 0.1  
+    # LP hyperparameters — match paper config.py EVAL dict: lp_epochs=50, lp_lr=1e-2
+    lp_lr         = 0.01   # config.py EVAL["lp_lr"]
+    lp_patience   = 50     # patience >= max_epochs → effectively no early stopping
+    lp_max_epochs = 50     # config.py EVAL["lp_epochs"] (was 20/150 — now uniform 50)
+    lp_val_ratio  = 0.1
 
 
     clf, best_val_acc, best_epoch, history = _train_linear_probe(

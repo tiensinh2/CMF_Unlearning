@@ -625,77 +625,47 @@ def main():
             unlearn_model, device, test_loader, args.unlearn_class, args.class_label_names, args.num_classes,
             job_name=args.unlearn_method, set_name="Final Test Set"
         )
-        evaluation_results = {}    
+        evaluation_results = {}
         evaluation_results["train_retain_acc"] = train_retain_acc
         evaluation_results["train_forget_acc"] = train_forget_acc
         evaluation_results["train_metric"] = train_metric
         evaluation_results["test_retain_acc"] = test_retain_acc
         evaluation_results["test_forget_acc"] = test_forget_acc
-        evaluation_results["test_metric"] = train_metric
+        evaluation_results["test_metric"] = test_metric  # fix: was incorrectly using train_metric
 
-        
-        
-        
-
-        '''''''''
-        classes_for_mia = args.unlearn_class
-        classes_for_mia = list(set(classes_for_mia))         
-        model.do_log_softmax  = True
-        train_retain_dataset, train_forget_dataset, train_retain_index, train_forget_index = get_retain_forget_partition(args, dataset1, classes_for_mia, return_ind = True)
-        train_retain_loader = torch.utils.data.DataLoader(train_retain_dataset,**test_kwargs)
-        train_forget_loader = torch.utils.data.DataLoader(train_forget_dataset,**test_kwargs)
-        test_retain_dataset, test_forget_dataset = get_retain_forget_partition(args, dataset2, classes_for_mia)
-        test_forget_loader = torch.utils.data.DataLoader(test_forget_dataset,**test_kwargs)
-        test_retain_loader = torch.utils.data.DataLoader(test_retain_dataset,**test_kwargs)
-        evaluation_results["SVC_MIA_forget_efficacy"] = SVC_MIA(
-                            shadow_train=train_retain_loader,
-                            shadow_test=test_retain_loader,
-                            target_train=None,
-                            target_test=test_forget_loader,
-                            model=model,
-                        )
-        use_last_only = args.freeze_except_last or args.zero_last_layer or args.unlearn_method == "prune"
-
-        if use_last_only:
-            outs_LP = evaluation.linear_probe_last_layer(
-                args, model, train_loader, test_loader,
-                args.num_classes, args.prob_batch_size, device
-            )
-            outs_LP = [outs_LP]
-        else:
-            outs_LP = evaluation.linear_probe(
-                args, model, train_loader, test_loader,
-                args.num_classes, args.prob_batch_size, device
-            )
-
-        pd.set_option('display.max_rows', None)
-        pd.set_option('display.max_columns', None)
-        pd.set_option('display.width', None)
-        pd.set_option('display.max_colwidth', None)
-
-        outs_LP_df = pd.DataFrame(outs_LP)
-        print(outs_LP_df)
-
-        if not use_last_only:
-            evaluation.plot_LP(args, outs_LP_df)
-
-        evaluation_results["Linear_prob"] = outs_LP
+        # ── Linear Probe ────────────────────────────────────────────────────
+        # Paper §3.2: LP trained on full D = D_r ∪ D_f (train_loader),
+        # evaluated on test_loader.  Features frozen.
         forget_classes = args.unlearn_class
-        retain_classes=[c for c in range(args.num_classes) if c not in forget_classes]
+        retain_classes = [c for c in range(args.num_classes) if c not in forget_classes]
 
-        
-        metrics_penultimate = evaluation.nc_metrics(model,test_loader,device,
-                                            retain_classes, forget_classes)
-        
-        evaluation_results["nc_metrics_penultimate"] = metrics_penultimate
-        #evaluation_results["nc_metrics_final"] = metrics_final
+        outs_LP = evaluation.run_linear_probe_on_fresh_clone(
+            args=args,
+            get_model_fn=get_model,
+            device_probe=device,
+            src_model=unlearn_model,
+            train_loader=train_loader,   # full train set (D_r ∪ D_f)
+            test_loader=test_loader,
+            num_classes=args.num_classes,
+            bs_probe=args.prob_batch_size,
+        )
+        evaluation_results["linear_probe"] = outs_LP
+        print(f"[LP] test retain={outs_LP['acc_test_retain']:.4f}  "
+              f"forget={outs_LP['acc_test_forget']:.4f}")
 
-        print("nc_metrics_penultimate")
-        print(metrics_penultimate)
+        # ── NC metrics (NC-3 duality + NCC / NC-4) ──────────────────────────
+        # Paper protocol: class-mean centres from train_loader,
+        #                 accuracy evaluated on test_loader.
+        metrics_nc = evaluation.nc_metrics(
+            unlearn_model, test_loader, device,
+            retain_classes, forget_classes,
+            train_loader=train_loader,   # supply train centres for NCC
+            args=args,
+        )
+        evaluation_results["nc_metrics"] = metrics_nc
+        print("nc_metrics:", metrics_nc)
 
-        #print("nc_metrics_final")
-        #print(metrics_final)
-
+        # ── Save results ─────────────────────────────────────────────────────
         if args.save_model:
             suffix = ""
             if args.freeze_except_last:
@@ -703,10 +673,9 @@ def main():
             if getattr(args, "zero_last_layer", False):
                 suffix += "_zero"
             method = args.unlearn_method + suffix
-            result_path  = f"./checkpoints/{method}/{args.dataset}_{args.arch}/{','.join([str(v) for v in args.unlearn_class])}.json"
+            result_path = f"./checkpoints/{method}/{args.dataset}_{args.arch}/{','.join([str(v) for v in args.unlearn_class])}.json"
         with open(result_path, "w") as f:
-            json.dump(evaluation_results, f)
-            '''''''''
+            json.dump(evaluation_results, f, default=to_jsonable)
     
 if __name__=="__main__":
     main()

@@ -186,15 +186,29 @@ def tarun_unlearn(args, model, device, retain_loader, forget_loader, train_loade
     forget_set = set(args.unlearn_class)
     retain_classes = [i for i in range(args.num_classes) if i not in forget_set]
     if retain_classes:
+        # Whole-class removal: sample only from classes not being forgotten.
         index_list = []
         for i in retain_classes:
             class_i_index = np.intersect1d(np.where(i == targets)[0], val_index_arr)
             index_list.extend(class_i_index[:int(args.tarun_samples_per_class)])
     else:
+        # Stratified split: forget_set spans all classes, so val_index_arr already
+        # contains only the retained (non-forget) indices across all classes.
+        # Sample up to tarun_samples_per_class per class from val_index_arr.
         index_list = []
         for i in range(args.num_classes):
-            class_i_index = np.intersect1d(np.where(i == targets)[0], val_index_arr)
+            class_i_index = np.intersect1d(
+                np.where(targets == i)[0], val_index_arr
+            )
             index_list.extend(class_i_index[:int(args.tarun_samples_per_class)])
+        # Fallback: if still empty (e.g. val_index not provided), use all of val_index_arr.
+        if not index_list:
+            index_list = list(val_index_arr[:int(args.tarun_samples_per_class * args.num_classes)])
+    if not index_list:
+        raise ValueError(
+            f"tarun_unlearn: retain index_list is empty. "
+            f"val_index length={len(val_index_arr)}, retain_classes={retain_classes}"
+        )
     small_retain_loader = torch.utils.data.DataLoader(
         torch.utils.data.Subset(train_dataset, index_list), batch_size=batch_size, shuffle=True
     )

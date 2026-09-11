@@ -708,8 +708,10 @@ def test(model, device, data_loader,  unlearn_class_list, class_label_names, num
     for i in range(0,num_classes):
         dict_classwise_acc[class_label_names[i]] =  100*classwise_acc[i]
     if unlearn_class_list:
-        forget_loss = sum([float(dict_classwise_loss[key]) for key in dict_classwise_loss if key in unlearn_class_list])/ sum([float(val) for i, val in enumerate(cm.sum(axis=1)) if i in unlearn_class_list])
-        forget_acc = sum([float(val) for i, val in enumerate(cm.diagonal()) if i in unlearn_class_list])/ sum([float(val) for i, val in enumerate(cm.sum(axis=1)) if i in unlearn_class_list])
+        _forget_denom      = sum([float(val) for i, val in enumerate(cm.sum(axis=1)) if i in unlearn_class_list])
+        _forget_loss_denom = sum([float(val) for i, val in enumerate(cm.sum(axis=1)) if i in unlearn_class_list])
+        forget_loss = sum([float(dict_classwise_loss[key]) for key in dict_classwise_loss if key in unlearn_class_list]) / _forget_loss_denom if _forget_loss_denom > 0 else 0.0
+        forget_acc  = sum([float(val) for i, val in enumerate(cm.diagonal())  if i in unlearn_class_list]) / _forget_denom if _forget_denom > 0 else 0.0
         unlearn_class_name = [name for i, name in enumerate(class_label_names) if i in unlearn_class_list]
     else:
         forget_acc = 0
