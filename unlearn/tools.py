@@ -18,7 +18,9 @@ def maybe_eval_and_save(step, model, args,
     print("\n" + "-" * 40)
     print(f"Epoch: {step}")
     print("-" * 40)
-    device = torch.device(f"cuda:{args.gpu_id}") if torch.cuda.is_available() else torch.device("cpu")
+    # Bug 10 fix: args.gpu_id is not guaranteed to exist; fall back to cuda:0 or cpu.
+    _gpu_id = getattr(args, "gpu_id", 0)
+    device = torch.device(f"cuda:{_gpu_id}") if torch.cuda.is_available() else torch.device("cpu")
     # TRAIN set
     test(model, device, train_loader,
          args.unlearn_class, args.class_label_names, args.num_classes,

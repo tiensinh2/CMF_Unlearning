@@ -144,7 +144,7 @@ def scrub_CMF_unlearn(
     args.smoothing = 0.0
     args.msteps = int(args.scrub_msteps)
     args.clip = 0.2
-    args.sstart = 10
+    args.sstart = 1  # Bug 3 fix: was 10, SWA never activated for 3-epoch runs
     args.kd_T = 4
     args.distill = "kd"
 
@@ -395,7 +395,7 @@ def scrub_unlearn(
     args.smoothing = 0.0
     args.msteps = args.scrub_msteps
     args.clip = 0.2
-    args.sstart = 10
+    args.sstart = 1  # Bug 3 fix: was 10, SWA never activated for 3-epoch runs
     args.kd_T = 4
     args.distill = "kd"
 

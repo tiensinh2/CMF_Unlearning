@@ -214,9 +214,11 @@ def _run_stage2(
         ncc_ret, ncc_for = None, None
         try:
             from evaluation.nc import ncc_mismatch
-            ret_res = ncc_mismatch(args, model, retain_loader, retain_loader, device)
+            # Bug C5 fix: class means must be built from train_loader (all 50k),
+            # not retain_loader — matches paper eq. 3.
+            ret_res = ncc_mismatch(args, model, train_loader, retain_loader, device)
             ncc_ret = ret_res["ncc_acc"]
-            for_res = ncc_mismatch(args, model, retain_loader,
+            for_res = ncc_mismatch(args, model, train_loader,
                                     torch.utils.data.DataLoader(
                                         forget_loader.dataset, batch_size=256),
                                     device)

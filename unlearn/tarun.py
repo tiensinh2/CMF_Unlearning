@@ -5,6 +5,16 @@ from torch import nn
 from unlearn.tools import apply_prep
 
 
+class Noise(nn.Module):
+    """Learnable noise pattern used for UNSIR impair step (Bug 1 fix: moved before use)."""
+    def __init__(self, *dim):
+        super().__init__()
+        self.noise = torch.nn.Parameter(torch.randn(*dim), requires_grad=True)
+
+    def forward(self):
+        return self.noise
+
+
 def tarun_CMF_unlearn(args, model, device, retain_loader, forget_loader, train_loader, test_loader, train_dataset, val_index=None, **kwargs):
     from unlearn.tools import maybe_eval_and_save
     from utils import test
@@ -81,7 +91,7 @@ def tarun_CMF_unlearn(args, model, device, retain_loader, forget_loader, train_l
                 opt.zero_grad(); loss.backward(); opt.step()
                 total_loss.append(loss.cpu().item())
             print(f"Loss: {np.mean(total_loss)}")
-    batch_size = 128
+    # Bug 2 fix: do NOT overwrite batch_size to 128; noises were created with args.batch_size shape.
     num_batches = 20
     noisy_data = []
     for cls_num in args.unlearn_class:
@@ -91,7 +101,7 @@ def tarun_CMF_unlearn(args, model, device, retain_loader, forget_loader, train_l
                 noisy_data.append((batch[i], torch.tensor(cls_num)))
     other_samples = [(x.cpu(), torch.tensor(y)) for x, y in small_retain_loader.dataset]
     noisy_data += other_samples
-    noisy_loader = torch.utils.data.DataLoader(noisy_data, batch_size=batch_size, shuffle=True)
+    noisy_loader = torch.utils.data.DataLoader(noisy_data, batch_size=args.batch_size, shuffle=True)
     
     
     model.eval()
@@ -135,7 +145,7 @@ def tarun_CMF_unlearn(args, model, device, retain_loader, forget_loader, train_l
         )    
     # Repair step
     print("-"*100); print("Repair step on Forget Model"); print("-"*100)
-    heal_loader = torch.utils.data.DataLoader(other_samples, batch_size=128, shuffle=True)
+    heal_loader = torch.utils.data.DataLoader(other_samples, batch_size=args.batch_size, shuffle=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=repair_lr)
     for epoch in range(args.epochs_or_steps):
         model.train()
@@ -241,7 +251,7 @@ def tarun_unlearn(args, model, device, retain_loader, forget_loader, train_loade
                 opt.zero_grad(); loss.backward(); opt.step()
                 total_loss.append(loss.cpu().item())
             print(f"Loss: {np.mean(total_loss)}")
-    batch_size = 128
+    # Bug 2 fix: do NOT overwrite batch_size to 128; noises were created with args.batch_size shape.
     num_batches = 20
     noisy_data = []
     for cls_num in args.unlearn_class:
@@ -251,7 +261,7 @@ def tarun_unlearn(args, model, device, retain_loader, forget_loader, train_loade
                 noisy_data.append((batch[i], torch.tensor(cls_num)))
     other_samples = [(x.cpu(), torch.tensor(y)) for x, y in small_retain_loader.dataset]
     noisy_data += other_samples
-    noisy_loader = torch.utils.data.DataLoader(noisy_data, batch_size=batch_size, shuffle=True)
+    noisy_loader = torch.utils.data.DataLoader(noisy_data, batch_size=args.batch_size, shuffle=True)
     
     # Impair step
     print("-"*100); print("Impair step on Forget Model"); print("-"*100)
@@ -280,7 +290,7 @@ def tarun_unlearn(args, model, device, retain_loader, forget_loader, train_loade
         )    
     # Repair step
     print("-"*100); print("Repair step on Forget Model"); print("-"*100)
-    heal_loader = torch.utils.data.DataLoader(other_samples, batch_size=128, shuffle=True)
+    heal_loader = torch.utils.data.DataLoader(other_samples, batch_size=args.batch_size, shuffle=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=repair_lr)
     for epoch in range(args.epochs_or_steps):
         model.train()
@@ -308,9 +318,4 @@ def tarun_unlearn(args, model, device, retain_loader, forget_loader, train_loade
     return model
 
 
-class Noise(nn.Module):
-    def __init__(self, *dim):
-        super().__init__()
-        self.noise = torch.nn.Parameter(torch.randn(*dim), requires_grad=True)
-    def forward(self):
-        return self.noise
+# Noise class moved to top of file (Bug 1 fix: was defined after use).

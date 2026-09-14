@@ -20,7 +20,7 @@ def unlearn_naive(args, model, device, retain_loader, forget_loader, train_loade
     )
 
     method = args.unlearn_method
-    clip = args.grad_norm_clip
+    clip = getattr(args, "grad_norm_clip", None)
     forget_dataset = forget_loader.dataset
     forget_dataset, _ = torch.utils.data.random_split(
         forget_dataset, [args.num_forget_samples, len(forget_dataset) - args.num_forget_samples]
@@ -85,142 +85,8 @@ def unlearn_naive(args, model, device, retain_loader, forget_loader, train_loade
 
 
 
-import torch
-import torch.nn.functional as F
-from unlearn.tools import apply_prep
-
-@apply_prep
-def unlearn_naive_CMF_old(
-    args, model, device,
-    retain_loader, forget_loader,
-    train_loader, test_loader,
-    optimizer, epochs,
-    test_forget_loader, **kwargs
-):
-    from utils import test
-    from utils import get_model
-
-    print("[Before Unlearning] Evaluating CMF model")
-    print("args.CMF_momentum =", getattr(args, "CMF_momentum", None))
-    print("model.args.CMF_momentum =", getattr(model.args, "CMF_momentum", None))
-
-
-    test(
-        model, device, test_loader,
-        args.unlearn_class, args.class_label_names, args.num_classes,
-        job_name=args.unlearn_method, set_name="Test Set"
-    )
-
-    model.train()
-
-    # Setup optimizer
-    optimizer = torch.optim.SGD(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=args.lr,
-        momentum=args.momentum,
-        weight_decay=args.weight_decay,
-        nesterov=True
-    )
-
-    # Optional: clip gradient norm
-    clip = args.grad_norm_clip
-
-    # Use only a subset for forgetting and retaining
-    forget_dataset = forget_loader.dataset
-    forget_dataset, _ = torch.utils.data.random_split(
-        forget_dataset, [args.num_forget_samples, len(forget_dataset) - args.num_forget_samples]
-    )
-    retain_dataset = retain_loader.dataset
-    retain_dataset, _ = torch.utils.data.random_split(
-        retain_dataset, [args.num_retain_samples, len(retain_dataset) - args.num_retain_samples]
-    )
-    naive_retain_loader = torch.utils.data.DataLoader(retain_dataset, batch_size=args.batch_size, shuffle=True)
-    forget_iterator = iter(forget_loader)
-
-    retain_acc_list, forget_acc_list = [], []
-    LP_retain_acc_list, LP_forget_acc_list = [], []
-    LP_history_list = []
-    epoch_list = list(range(1, epochs + 1))
-    for epoch in range(1, epochs + 1):
-        for x, y in naive_retain_loader:
-            x, y = x.to(device), y.to(device)
-            optimizer.zero_grad()
-
-            # Negative gradient for forgetting data
-            if "ascent" in args.unlearn_method:
-                try:
-                    x_f, y_f = next(forget_iterator)
-                except StopIteration:
-                    forget_iterator = iter(forget_loader)
-                    x_f, y_f = next(forget_iterator)
-                x_f, y_f = x_f.to(device), y_f.to(device)
-                loss_f, _ = model.forward_a((x_f, y_f), stage="train")
-                (-loss_f).backward()
-
-            # Positive gradient for retaining data
-            if "descent" in args.unlearn_method:
-                loss_r, _ = model.forward_a((x, y), stage="train")
-                loss_r.backward()
-
-            if clip is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
-            optimizer.step()
-
-        model.eval()
-        print(f"[Epoch {epoch}] Evaluating after update...")
-        retain_acc, forget_acc, metric = test(
-            model, device, test_loader,
-            args.unlearn_class, args.class_label_names, args.num_classes,
-            job_name=args.unlearn_method, set_name=f"Test Set (Epoch {epoch})"
-        )
-        retain_acc_list.append(retain_acc)
-        forget_acc_list.append(forget_acc)
-        
-        
-        lp_every = getattr(args, "lp_every", 1)   # =1；is/be0canLP
-        do_lp = (lp_every > 0) and (epoch % lp_every == 0)
-
-        if do_lp:
-            print(f"[Epoch {epoch}] Evaluating Linear Probe after update...")
-            # recommended：device_probe = torch.device("cpu") ；use GPU，givetoone， cuda:1
-            #device_probe = torch.device("cpu")
-
-            outs_LP = evaluation.run_linear_probe_on_fresh_clone(
-                args=args,
-                get_model_fn=get_model,           # youhave's/ofworknumber
-                device_probe=device,       # training LP 's/of
-                src_model=model,                  # intraining's/ofmodel
-                train_loader=train_loader,
-                test_loader=test_loader,
-                num_classes=args.num_classes,
-                bs_probe=args.prob_batch_size,
-            )
-
-            LP_retain_acc_list.append(outs_LP["acc_test_retain"])
-            LP_forget_acc_list.append(outs_LP["acc_test_forget"])
-            LP_history_list.append(outs_LP.get("history"))
-            print(f"[LP@epoch{epoch}] retain={outs_LP['acc_test_retain']}, forget={outs_LP['acc_test_forget']}")
-        
-        model.train()
-
-    model.history_log = {
-        "retain_acc": retain_acc_list,
-        "forget_acc": forget_acc_list,
-        "LP_retain_acc": LP_retain_acc_list,
-        "LP_forget_acc": LP_forget_acc_list,
-        "LP_history": LP_history_list,
-        "epoch": epoch_list}
-    #print({"retain_acc": retain_acc_list, "forget_acc": forget_acc_list,"epoch": epoch_list})
-    #print(model.history_log)
-    
-    return model
-
-
-
-
-from unlearn.tools import apply_prep
-import torch
-import torch.nn.functional as F
+# Bug 8: dead function unlearn_naive_CMF_old removed — superseded by unlearn_naive_CMF below.
+# Bug 9: mid-file duplicate imports removed.
 
 @apply_prep
 def unlearn_naive_CMF(

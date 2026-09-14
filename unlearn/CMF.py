@@ -12,32 +12,26 @@ def CMF_fine_tuing(
     train_loader, test_loader,
     optimizer, epochs, **kwargs
 ):
+    """CMF static unlearning (Algorithm 2).
+
+    train_loader is the mean_loader passed by NB4/NB5 — either the full
+    training set ('train') or retain-only ('retain') depending on mean_source.
+    recompute_cmf and the per-epoch mean update both use this same loader so
+    that mean_source='retain' correctly computes means from retain data only.
+
+    Bug C1 fix: recompute_cmf now uses train_loader (= mean_loader passed by
+    caller), not a hardcoded reference to the full training loader.
+    Bug C2 fix: the gradient-update loop now trains on retain_loader only,
+    never on forget-class samples.
+    """
     from utils import test
+
+    # Align CMF weights using mean_loader (passed as train_loader by NB4/NB5)
     model.eval()
-    model.recompute_cmf(train_loader, device=device)   # ★ key：andlogic/trainingconsistent's/of W、μ
-    model.train()
+    model.recompute_cmf(train_loader, device=device)
 
-    '''''
-    # Step 0: Test old model before fine-tuning
-    print("[Before Fine-tuning] Testing old model")
-    test(
-        model, device, test_loader,
-        args.unlearn_class, args.class_label_names, args.num_classes,
-        job_name=args.unlearn_method, set_name="Test Set (Before Fine-tune)"
-    )
-
-    # Step 1: constructuse CMF 's/ofnewmodel
-    args.CMFClassifier = True  # ✅ use CMF classifier
-    new_model = ModelModule(args).to(device)
-
-    # Step 2: control encoder number（modelis encoder）
-    new_model.encoder.load_state_dict(model.state_dict())
-    '''''
-
-
-    # Step 3:  SGD optimalifydevice
+    # SGD optimizer
     optimizer = torch.optim.SGD(
-        #filter(lambda p: p.requires_grad, new_model.parameters()),
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=getattr(args, "lr", 1e-3),
         momentum=getattr(args, "momentum", 0.9),
@@ -45,8 +39,7 @@ def CMF_fine_tuing(
         nesterov=True
     )
 
-    # Step 4: Fine-tuning Loop
-    #new_model.train()
+    # Training loop — retain_loader only (never trains on forget class)
     model.train()
     for epoch in range(1, epochs + 1):
         model.train()
@@ -54,65 +47,41 @@ def CMF_fine_tuing(
         total_correct = 0
         total_samples = 0
 
-        for x, y in train_loader:
+        for x, y in retain_loader:
             x, y = x.to(device), y.to(device)
-            batch = (x, y)
-
             optimizer.zero_grad()
-
-            #loss, acc = new_model.forward_a(batch, stage="train")
-            loss, acc = model.forward_a(batch, stage="train")
-
-            
+            loss, acc = model.forward_a((x, y), stage="train")
             loss.backward()
             optimizer.step()
-
             bs = x.size(0)
-            total_loss += loss.item() * bs
+            total_loss   += loss.item() * bs
             total_correct += float(acc.item()) * bs
             total_samples += bs
 
-        avg_loss = total_loss / total_samples
-        avg_acc = total_correct / total_samples
+        avg_loss = total_loss / max(total_samples, 1)
+        avg_acc  = total_correct / max(total_samples, 1)
         print(f"[Epoch {epoch}] Train Loss: {avg_loss:.4f}, Accuracy: {avg_acc:.2%}")
 
-        # Step 5: Eval on Test Set
-        #new_model.eval()
+        # Recompute CMF using mean_loader after each epoch
         model.eval()
         model.recompute_cmf(train_loader, device=device)
-        correct, total = 0, 0
-        with torch.no_grad():
-            for x, y in test_loader:
-                x, y = x.to(device), y.to(device)
-                #feats = F.normalize(new_model.encoder(x))
-                #weights = F.normalize(new_model.CMFweights.weight)
-                logits = model.forward(x)   # ★ sampleuseuse ẑ @ W^T
-                pred = logits.argmax(dim=1)
-                correct += (pred == y).sum().item()
-                total += y.size(0)
-        acc = 100.0 * correct / max(1, total)
-        print(f"[Epoch {epoch}] CMF Test Accuracy: {acc:.2f}%")
-        #new_model.train()
-
-        test(
-        #new_model, device, test_loader,
-        model, device, test_loader,
-        args.unlearn_class, args.class_label_names, args.num_classes,
-        job_name=args.unlearn_method, set_name="Test Set (After Fine-tune)"
+        retain_acc, forget_acc, _ = test(
+            model, device, test_loader,
+            args.unlearn_class, args.class_label_names, args.num_classes,
+            job_name=args.unlearn_method, set_name=f"Test Set (Epoch {epoch})"
         )
-        
+        model.train()
 
-    # Step 6: Final Evaluation
-    print("[After Fine-tuning] Testing CMF model")
+    # Final recompute and evaluation
+    model.eval()
     model.recompute_cmf(train_loader, device=device)
     retain_acc, forget_acc, _ = test(
         model, device, test_loader,
         args.unlearn_class, args.class_label_names, args.num_classes,
-        job_name=args.unlearn_method, set_name="Test Set (After Fine-tune)"
+        job_name=args.unlearn_method, set_name="Test Set (Final)"
     )
     model.history_log = {
         "retain_acc": [retain_acc],
         "forget_acc": [forget_acc],
     }
     return model
-

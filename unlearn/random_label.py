@@ -5,17 +5,6 @@ import copy
 from unlearn.tools import apply_prep
 import evaluation
 
-
-from unlearn.tools import apply_prep
-import copy
-import torch
-import torch.nn.functional as F
-
-import copy
-import torch
-import torch.nn.functional as F
-from unlearn.tools import apply_prep
-
 @apply_prep
 def random_label_CMF_unlearn_iter_eval(
     args, model, device,
@@ -964,12 +953,14 @@ def random_label_unlearn(args, model, device,
         
         # Eval after this epoch
         model.eval()
+        # Bug 7 fix: was test(... train_loader ... set_name="Test Set") — wrong loader/label.
+        # Replaced with clearly-labelled train-set debug eval (optional info, not used in metrics).
         test(model, device, train_loader,
-         args.unlearn_class, args.class_label_names, args.num_classes,
-         job_name=args.unlearn_method, set_name="Test Set")
+             args.unlearn_class, args.class_label_names, args.num_classes,
+             job_name=args.unlearn_method, set_name="Train Set (debug)")
         retain_acc, forget_acc, metric = test(model, device, test_loader,
-         args.unlearn_class, args.class_label_names, args.num_classes,
-         job_name=args.unlearn_method, set_name="Test Set")
+             args.unlearn_class, args.class_label_names, args.num_classes,
+             job_name=args.unlearn_method, set_name="Test Set")
         
         retain_acc_list.append(retain_acc)
         forget_acc_list.append(forget_acc)
@@ -1137,7 +1128,7 @@ def re_train(args, model, device,
                 scheduler.step(train_loss)
             else:
                 scheduler.step()
-    print("Best epoch: {best_epoch}")
+    print(f"Best epoch: {best_epoch}")
     model.load_state_dict(best_model)
     return model
 

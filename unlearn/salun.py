@@ -9,9 +9,8 @@ import evaluation
 
 
 def get_salun_mask(args, model, device, forget_loader):
-    
     if args.unlearn_method != "salun":
-        return None 
+        return None
     mask = {}
     for name, param in model.named_parameters():
         mask[name] = torch.zeros_like(param, device=device)
@@ -31,6 +30,8 @@ def get_salun_mask(args, model, device, forget_loader):
             for name, p in model.named_parameters():
                 if p.grad is not None:
                     mask[name] += p.grad.detach().abs()
+
+    model.train(was_training)  # Bug 5 fix: restore training mode
 
     all_elements = -torch.cat([t.flatten() for t in mask.values()])
     threshold_index = int(len(all_elements) * args.salun_threshold)
@@ -228,13 +229,6 @@ def salun_unlearn(
     return model
 
 
-
-import torch
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, ConcatDataset
-import copy
-import evaluation
-from unlearn.tools import apply_prep
 
 def build_salun_mask(args, model, device, forget_loader):
     """
