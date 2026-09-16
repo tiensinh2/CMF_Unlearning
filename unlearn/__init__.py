@@ -12,7 +12,7 @@ from .SVD import SVD_unlearn
 from .nc_prune import prune
 from .CMF import CMF_fine_tuing as CMF_FT
 from .retrain import re_train
-from .cmf_two_stage import cmf_two_stage_unlearn  # Part B: two-stage schedule
+from .cmf_two_stage import cmf_two_stage_unlearn, cmf_adaptive_unlearn  # Part B
 
 # NOTE: "grad_descent" previously mapped to unlearn_naive (NegGrad+, ascent+descent).
 # This was a bug: any run with --unlearn-method grad_descent produced NegGrad+ results,
@@ -45,4 +45,6 @@ unlear_func = {
     "random_label_once_CMF_RemoveFC": random_label_once_CMF_unlearn,
     # Part B: two-stage CMF unlearning
     "cmf_two_stage": cmf_two_stage_unlearn,
+    # Part B: adaptive-alpha blending + oracle early-stop
+    "cmf_adaptive": cmf_adaptive_unlearn,
 }
