@@ -53,7 +53,10 @@ A.6 — Evaluation protocol: ONE split, generated once in NB1, loaded by all dow
 A.7 — Runtime bugs: CUDA events guarded with `if device.type == 'cuda':` in unlearn/naive.py.
       "grad_descent" key now maps to unlearn_grad_descent_only (not unlearn_naive).
 
-A.8 — Notebook provenance: all notebooks clone from official ycgao1/CMF_Unlearning at main.
+A.8 — Notebook provenance: all notebooks clone from tiensinh2/CMF_Unlearning (fork with
+       all bug fixes applied). Official upstream: ycgao1/CMF_Unlearning. The fork carries
+       the ZeroDivisionError guard (utils.py), num_samples=0 fix (tarun.py), and stale-clone
+       git remote set-url fix in every notebook's clone cell.
 
 TABLE 4 VERBATIM — CIFAR-10 ResNet-18 (PDF lines 2307–2434):
   Original:              epochs=300, batch=128, lr=0.01,  mom=0.9, cosine LR, WD=5×10⁻⁴
