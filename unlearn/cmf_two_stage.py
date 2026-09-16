@@ -20,21 +20,24 @@ Config params:
     mean_source              'train' | 'retain'
     base_method              method key passed to cmf_static style training
 
-Adaptive-α blending (cmf_adaptive_unlearn):
-    illusion_gap(epoch) = output_forget_acc(epoch) - ncc_forget_acc(epoch)
-    alpha(epoch)        = clamp(illusion_gap / gap_scale, 0, 1)
-    W_eff               = (1-alpha)*W_learned + alpha*W_CMF_reconstructed
-    Applied BEFORE the next epoch's forward pass so the encoder trains against
-    the blended classifier (not a stale one).
+Adaptive-α blending (cmf_adaptive_unlearn) — TRUE two-stage design:
+    STAGE 1: run cmf_static_unlearn for `epochs` epochs (recompute_cmf each
+             epoch, freeze W, update encoder).  Identical to Algorithm 2.
+    STAGE 2: freeze encoder; snapshot W_CMF from Stage-1 end (no further
+             recompute).  W_learned starts from Stage-1 W_CMF and is updated
+             by gradient descent on retain set each epoch.
+             Each epoch:
+               illusion_gap = output_forget_acc - ncc_forget_acc
+               alpha        = clamp(gap / gap_scale, 0, 1)
+               W_eff        = (1-alpha)*W_learned + alpha*W_CMF_fixed
+               W_learned   ← W_eff
 
     args fields consumed:
-        gap_scale          float  — normaliser derived from a random_label
-                                    calibration run (set by the caller).
-                                    Default 20.0 (sensible starting point for
-                                    CIFAR-10; caller should override).
+        gap_scale          float  — default 20.0
+        alpha_epochs       int    — Stage-2 epoch budget (default = epochs)
         alpha_log_every    int    — print alpha / gap every N epochs (default 1)
 
-Oracle-distance early stopping (both cmf_adaptive_unlearn and cmf_two_stage_unlearn):
+Oracle-distance early stopping (Stage 2 of cmf_adaptive_unlearn and cmf_two_stage_unlearn):
     Stop when |ncc_forget_acc(epoch) - oracle_ncc_forget_acc| <= k_stop * oracle_std.
     Breaks on FIRST entry — does not wait for stability.
 
@@ -563,120 +566,140 @@ def cmf_adaptive_unlearn(
     optimizer, epochs,
     test_forget_loader, **kwargs
 ):
-    """Adaptive-α CMF blending with oracle-distance early stopping.
+    """Two-stage CMF + Adaptive-α blending.
 
-    Each epoch:
-      1. Run one epoch of base_method encoder update (ascent/descent).
-      2. Recompute W_CMF closed-form from current encoder.
-      3. Compute illusion_gap = output_forget_acc - ncc_forget_acc.
-         (large gap → classifier moved but encoder didn't → need more CMF)
-      4. alpha = clamp(illusion_gap / gap_scale, 0, 1)
-      5. W_eff = (1-alpha)*W_learned + alpha*W_CMF
-         Write W_eff → model.CMFweights.weight  BEFORE next epoch's forward.
-      6. Check oracle early-stop condition on ncc_forget_acc.
+    Stage 1 — cmf_static (all `epochs` epochs):
+        Each epoch: recompute_cmf → freeze W → update encoder (base_method).
+        W is computed closed-form from features; encoder learns to forget.
 
-    W_learned is a real nn.Parameter (via CMFWeightsTrainable) that receives
-    gradient updates from CE loss on retain set each epoch.
+    Stage 2 — Adaptive-α W blending (`alpha_epochs` epochs, default=epochs):
+        Encoder is frozen at Stage-1 end.
+        W_CMF is fixed (snapshot from Stage-1 end — no further recompute).
+        W_learned starts from the Stage-1 W_CMF and is updated by gradient
+        descent (CE loss on retain set) each epoch.
+        Each epoch:
+          illusion_gap = output_forget_acc - ncc_forget_acc
+          alpha        = clamp(gap / gap_scale, 0, 1)
+          W_eff        = (1-alpha)*W_learned + alpha*W_CMF
+          W_learned    ← W_eff  (kept in sync for next epoch)
+        Oracle early-stop: stop when |ncc_forget - oracle_mu| <= k_stop*oracle_std.
 
-    Required args:
-        gap_scale              float  (normaliser for illusion_gap → alpha;
-                                       default 20.0)
-    Optional:
-        alpha_log_every        int    (print alpha every N epochs; default 1)
+    Args consumed (all optional with sensible defaults):
+        gap_scale              float  default 20.0
+        alpha_epochs           int    default = epochs (same budget as Stage 1)
+        alpha_log_every        int    default 1
         oracle_ncc_forget_acc  float
         oracle_ncc_forget_std  float
-        k_stop                 float  (default 1.5)
+        k_stop                 float  default 1.5
     """
     from utils import test
+    from unlearn.CMF import CMF_fine_tuing as cmf_static_unlearn
 
-    mean_source = getattr(args, "mean_source", "train")
-    mean_loader = train_loader if mean_source == "train" else retain_loader
-    gap_scale   = float(getattr(args, "gap_scale", 20.0))
+    mean_source     = getattr(args, "mean_source", "train")
+    mean_loader     = train_loader if mean_source == "train" else retain_loader
+    gap_scale       = float(getattr(args, "gap_scale", 20.0))
+    alpha_epochs    = int(getattr(args, "alpha_epochs", epochs))
     alpha_log_every = int(getattr(args, "alpha_log_every", 1))
-    temperature = getattr(model, "args", args).temperature if hasattr(
-        getattr(model, "args", None), "temperature") else getattr(args, "temperature", 1.0)
+    temperature     = getattr(args, "temperature", 1.0)
+    oracle_mu       = getattr(args, "oracle_ncc_forget_acc", None)
+    oracle_std      = getattr(args, "oracle_ncc_forget_std", None)
+    k_stop          = getattr(args, "k_stop", 1.5)
 
-    print(f"[cmf_adaptive] epochs={epochs} gap_scale={gap_scale} "
+    print(f"[cmf_adaptive] Stage1={epochs} epochs cmf_static  |  "
+          f"Stage2={alpha_epochs} epochs adaptive-α  gap_scale={gap_scale}  "
           f"mean_source={mean_source}")
-    oracle_mu  = getattr(args, "oracle_ncc_forget_acc", None)
-    oracle_std = getattr(args, "oracle_ncc_forget_std", None)
-    k_stop     = getattr(args, "k_stop", 1.5)
     if oracle_mu is not None:
         print(f"[cmf_adaptive] oracle_stop: mu={oracle_mu:.2f} std={oracle_std:.2f} "
               f"k_stop={k_stop} → zone=[{oracle_mu - k_stop*oracle_std:.2f}, "
               f"{oracle_mu + k_stop*oracle_std:.2f}]")
     else:
-        print("[cmf_adaptive] oracle early-stop DISABLED (oracle_ncc_forget_acc not set)")
+        print("[cmf_adaptive] oracle early-stop DISABLED")
 
-    # ─── Initial CMF alignment ───────────────────────────────────────────
+    log_rows: list         = []
+    early_stopped          = False
+    stopped_at_epoch: Optional[int] = None
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # STAGE 1: cmf_static — recompute_cmf each epoch, freeze W, update encoder
+    # ═══════════════════════════════════════════════════════════════════════
+    print(f"\n{'='*60}")
+    print(f"[cmf_adaptive] STAGE 1: cmf_static — {epochs} epochs")
+    print(f"{'='*60}\n")
+
+    orig_eps = getattr(args, "epochs_or_steps", epochs)
+    args.epochs_or_steps = epochs
+    model = cmf_static_unlearn(
+        args=args, model=model, device=device,
+        retain_loader=retain_loader, forget_loader=forget_loader,
+        train_loader=train_loader, test_loader=test_loader,
+        optimizer=optimizer, epochs=epochs,
+        test_forget_loader=test_forget_loader,
+        **{k2: v for k2, v in kwargs.items()},
+    )
+    args.epochs_or_steps = orig_eps
+
+    # Capture Stage-1 history
+    if hasattr(model, "history_log"):
+        h = model.history_log
+        for ep_idx, ep_num in enumerate(h.get("epoch", [])):
+            log_rows.append({
+                "stage": "S1",
+                "epoch": ep_num,
+                "output_retain_acc": h["retain_acc"][ep_idx] if ep_idx < len(h.get("retain_acc", [])) else None,
+                "output_forget_acc": h["forget_acc"][ep_idx] if ep_idx < len(h.get("forget_acc", [])) else None,
+                "ncc_forget_acc": None,
+                "illusion_gap": None,
+                "alpha": None,
+                "early_stopped": False,
+            })
+
+    # ── Snapshot W_CMF at Stage-1 end (fixed for all of Stage 2) ────────
     model.eval()
     model.recompute_cmf(mean_loader, device=device)
+    W_cmf_fixed = model.CMFweights.weight.detach().clone()   # [K, D] — frozen
 
-    # ─── Promote W to trainable parameter ────────────────────────────────
-    # W_learned starts as a copy of the current CMF reconstruction.
+    # ═══════════════════════════════════════════════════════════════════════
+    # STAGE 2: adaptive-α blending — encoder frozen, W blended each epoch
+    # ═══════════════════════════════════════════════════════════════════════
+    print(f"\n{'='*60}")
+    print(f"[cmf_adaptive] STAGE 2: adaptive-α — {alpha_epochs} epochs  "
+          f"(encoder frozen, W_CMF fixed from Stage-1 end)")
+    print(f"{'='*60}\n")
+
+    # Freeze encoder
+    for p in model.parameters():
+        p.requires_grad_(False)
+
+    # Promote W to trainable — starts from Stage-1 W_CMF
     tw = CMFWeightsTrainable(model.CMFweights)
     tw = tw.to(device)
-    tw.promote()   # W_param initialized from current CMFweights.weight
+    tw.promote()   # W_param ← copy of current CMFweights.weight (Stage-1 W_CMF)
 
-    # Optimizer for W_learned only (encoder has its own optimizer below)
     optim_w = torch.optim.SGD(
         [tw.W_param], lr=getattr(args, "lr", 1e-3), momentum=0.9, weight_decay=1e-4
     )
 
-    # Encoder optimizer — all trainable params except W_learned
-    # (W is managed separately via tw)
-    encoder_params = [p for p in model.parameters() if p.requires_grad]
-    optim_enc = torch.optim.SGD(
-        encoder_params,
-        lr=getattr(args, "lr", 1e-3),
-        momentum=getattr(args, "momentum", 0.9),
-        weight_decay=getattr(args, "weight_decay", 5e-4),
-        nesterov=True,
-    )
-
-    log_rows: list = []
-    early_stopped    = False
-    stopped_at_epoch: Optional[int] = None
-
-    # ─── Baseline (epoch 0) ──────────────────────────────────────────────
-    model.eval()
+    # Baseline at Stage-2 start (after Stage-1 completes)
     retain_acc0, forget_acc0, _ = test(
         model, device, test_loader,
         args.unlearn_class, args.class_label_names, args.num_classes,
-        job_name="cmf_adaptive", set_name="Epoch 0",
+        job_name="cmf_adaptive", set_name="S2 Epoch 0",
     )
-    ncc_forget0 = _ncc_forget_acc(model, train_loader, forget_loader, device)
-    gap0        = forget_acc0 - ncc_forget0
-    alpha0      = max(0.0, min(1.0, gap0 / gap_scale))
-    print(f"[Epoch 0] output_forget={forget_acc0:.2f}% ncc_forget={ncc_forget0:.2f}% "
-          f"gap={gap0:.2f} alpha={alpha0:.3f}")
+    ncc_forget0  = _ncc_forget_acc(model, train_loader, forget_loader, device)
+    gap0         = forget_acc0 - ncc_forget0
+    alpha0       = max(0.0, min(1.0, gap0 / gap_scale))
+    print(f"[S2 Epoch 0] output_forget={forget_acc0:.2f}%  "
+          f"ncc_forget={ncc_forget0:.2f}%  gap={gap0:.2f}  alpha={alpha0:.3f}")
     log_rows.append({
-        "epoch": 0,
-        "output_retain_acc": retain_acc0,
-        "output_forget_acc": forget_acc0,
-        "ncc_forget_acc": ncc_forget0,
-        "illusion_gap": gap0,
-        "alpha": alpha0,
-        "early_stopped": False,
+        "stage": "S2", "epoch": 0,
+        "output_retain_acc": retain_acc0, "output_forget_acc": forget_acc0,
+        "ncc_forget_acc": ncc_forget0, "illusion_gap": gap0,
+        "alpha": alpha0, "early_stopped": False,
     })
 
-    # ─── Training loop ────────────────────────────────────────────────────
-    for epoch in range(1, epochs + 1):
+    for epoch in range(1, alpha_epochs + 1):
 
-        # ── 1. Encoder update (base_method: ascent on forget, descent on retain)
-        model.train()
-        for xb, yb in retain_loader:
-            xb, yb = xb.to(device), yb.to(device)
-            optim_enc.zero_grad()
-            loss, _ = model.forward_a((xb, yb), stage="train")
-            loss.backward()
-            if getattr(args, "grad_norm_clip", None):
-                torch.nn.utils.clip_grad_norm_(encoder_params, args.grad_norm_clip)
-            optim_enc.step()
-            if getattr(args, "dry_run", False):
-                break
-
-        # ── 2. W_learned gradient update (CE on retain features)
+        # ── 1. W_learned gradient update (CE on retain features, encoder frozen)
         model.eval()
         for xb, yb in retain_loader:
             xb, yb = xb.to(device), yb.to(device)
@@ -691,80 +714,50 @@ def cmf_adaptive_unlearn(
             if getattr(args, "dry_run", False):
                 break
 
-        # ── 3. Recompute W_CMF from current encoder state
-        model.eval()
-        model.recompute_cmf(mean_loader, device=device)
-        W_cmf = model.CMFweights.weight.detach().clone()  # [K, D]
-
-        # ── 4. Evaluate output_forget and ncc_forget for this epoch
+        # ── 2. Evaluate output_forget and ncc_forget
+        #    (sync W_learned → buffer so model.forward uses it)
+        tw.sync_back()
         retain_acc, forget_acc, _ = test(
             model, device, test_loader,
             args.unlearn_class, args.class_label_names, args.num_classes,
-            job_name="cmf_adaptive", set_name=f"Epoch {epoch}",
+            job_name="cmf_adaptive", set_name=f"S2 Epoch {epoch}",
         )
-        ncc_forget = _ncc_forget_acc(model, train_loader, forget_loader, device)
+        ncc_forget   = _ncc_forget_acc(model, train_loader, forget_loader, device)
 
-        # ── 5. Compute alpha from illusion gap (using THIS epoch's metrics)
-        illusion_gap = forget_acc - ncc_forget   # positive → gap → more CMF
+        # ── 3. Compute alpha from illusion gap
+        illusion_gap = forget_acc - ncc_forget
         alpha        = max(0.0, min(1.0, illusion_gap / gap_scale))
 
-        # ── 6. Blend W_eff = (1-alpha)*W_learned + alpha*W_CMF
-        #       Write back BEFORE next epoch's forward pass.
+        # ── 4. Blend W_eff = (1-alpha)*W_learned + alpha*W_CMF_fixed
         with torch.no_grad():
-            W_learned = tw.W_param.data           # [K, D] — gradient-trained
-            W_eff     = (1.0 - alpha) * W_learned + alpha * W_cmf
-            model.CMFweights.weight.copy_(W_eff)
-            # Keep W_learned in sync so it starts from a reasonable point next epoch
-            # (optional: comment out to let them diverge freely)
+            W_eff = (1.0 - alpha) * tw.W_param.data + alpha * W_cmf_fixed
             tw.W_param.data.copy_(W_eff)
+            model.CMFweights.weight.copy_(W_eff)
 
         if epoch % alpha_log_every == 0:
-            print(f"[Epoch {epoch}] output_forget={forget_acc:.2f}% "
-                  f"ncc_forget={ncc_forget:.2f}% gap={illusion_gap:.2f} alpha={alpha:.3f}")
+            print(f"[S2 Epoch {epoch}] output_forget={forget_acc:.2f}%  "
+                  f"ncc_forget={ncc_forget:.2f}%  gap={illusion_gap:.2f}  alpha={alpha:.3f}")
 
         log_rows.append({
-            "epoch": epoch,
-            "output_retain_acc": retain_acc,
-            "output_forget_acc": forget_acc,
-            "ncc_forget_acc": ncc_forget,
-            "illusion_gap": illusion_gap,
-            "alpha": alpha,
-            "early_stopped": False,
+            "stage": "S2", "epoch": epoch,
+            "output_retain_acc": retain_acc, "output_forget_acc": forget_acc,
+            "ncc_forget_acc": ncc_forget, "illusion_gap": illusion_gap,
+            "alpha": alpha, "early_stopped": False,
         })
 
-        # ── 7. Oracle early-stop check (first entry into oracle zone)
+        # ── 5. Oracle early-stop
         if _check_oracle_stop(ncc_forget, args):
             print(f"[OracleStop] NCC forget={ncc_forget:.2f}% entered oracle zone "
-                  f"at epoch {epoch}. Stopping.")
+                  f"at S2 epoch {epoch}. Stopping.")
             log_rows[-1]["early_stopped"] = True
             early_stopped    = True
             stopped_at_epoch = epoch
             break
 
-    # ─── Final recompute (ensure CMFweights.weight reflects blended W_eff) ─
-    model.eval()
-    # W_eff was already written in the last epoch; recompute_cmf would overwrite it,
-    # so we skip a final recompute and keep the blended W.
-
-    # ─── Save checkpoint ─────────────────────────────────────────────────
-    ckpt_dir = (f"./checkpoints/cmf_adaptive/"
-                f"{getattr(args, 'dataset', 'cifar10')}_{getattr(args, 'arch', 'resnet18')}")
-    classes_str = ",".join(str(c) for c in getattr(args, "unlearn_class", []))
-    ckpt_path = (f"{ckpt_dir}/{classes_str}_adaptive"
-                 f"_gap{gap_scale}_ks{k_stop}.pt")
-    _save_ckpt(model, ckpt_path, extra={
-        "tw_extra": tw.state_dict_extra(),
-        "early_stopped": early_stopped,
-        "stopped_at_epoch": stopped_at_epoch,
-        "gap_scale": gap_scale,
-        "k_stop": k_stop,
-        "oracle_ncc_forget_acc": oracle_mu,
-        "oracle_ncc_forget_std": oracle_std,
-        "official_repo_commit": getattr(args, "official_repo_commit", "main"),
-    })
-
     model.history_log = {
         "adaptive_log": log_rows,
+        "stage1_epochs": epochs,
+        "stage2_epochs": alpha_epochs,
         "early_stopped": early_stopped,
         "stopped_at_epoch": stopped_at_epoch,
         "gap_scale": gap_scale,
