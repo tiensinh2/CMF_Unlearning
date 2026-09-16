@@ -654,8 +654,7 @@ def cmf_adaptive_unlearn(
             })
 
     # ── Snapshot W_CMF at Stage-1 end (fixed for all of Stage 2) ────────
-    model.eval()
-    model.recompute_cmf(mean_loader, device=device)
+    # CMF_fine_tuing already ends with recompute_cmf — W is current, just clone it.
     W_cmf_fixed = model.CMFweights.weight.detach().clone()   # [K, D] — frozen
 
     # ═══════════════════════════════════════════════════════════════════════
