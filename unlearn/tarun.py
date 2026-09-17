@@ -42,7 +42,14 @@ def tarun_CMF_unlearn(args, model, device, retain_loader, forget_loader, train_l
     batch_size = args.batch_size
     impair_lr = args.tarun_impair_lr
     repair_lr = args.lr
-    targets = np.array(train_dataset.targets)
+    if hasattr(train_dataset, "targets"):
+        targets = np.array(train_dataset.targets)
+    elif hasattr(train_dataset, "tensors") and len(train_dataset.tensors) > 1:
+        targets = train_dataset.tensors[1].cpu().numpy()
+    elif hasattr(train_dataset, "labels"):
+        targets = np.array(train_dataset.labels)
+    else:
+        targets = np.array([y for _, y in train_dataset])
     val_index_arr = np.array(val_index) if val_index is not None else np.arange(len(targets))
     forget_set = set(args.unlearn_class)
     # For whole-class removal: only retain-class samples. For stratified (forget_set==all

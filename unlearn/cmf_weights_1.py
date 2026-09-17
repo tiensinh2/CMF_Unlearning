@@ -160,8 +160,14 @@ class ModelModule(pl.LightningModule):
             means[mask] = means[mask] - mu
             means[mask] = F.normalize(means[mask], dim=1)
 
-        # write
-        self.CMFweights.weight.copy_(means)
+        # Warn if any classes were missing from the loader
+        if not mask.all():
+            missing_classes = (~mask).nonzero(as_tuple=True)[0].tolist()
+            print(f"[recompute_cmf WARNING] Classes {missing_classes} not present in loader; retaining existing weights for these classes.")
+
+        # write only observed class centroids to prevent NaN injection
+        if mask.any():
+            self.CMFweights.weight[mask] = means[mask]
         self.CMFweights.mu.copy_(mu)
 
         return None, None, None, None, None

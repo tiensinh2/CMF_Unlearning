@@ -1,0 +1,370 @@
+﻿=== cell 1 ===
+import subprocess, sys
+def sh(cmd, verbose=True):
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if verbose and r.stdout: print(r.stdout[-4000:])
+    if r.returncode != 0 and r.stderr: print('STDERR:', r.stderr[-2000:])
+    return r.returncode
+sh('pip install -q timm einops scikit-learn matplotlib seaborn pytorch-lightning torchmetrics')
+
+=== cell 2 ===
+import os, sys, json, random, math, time, copy
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import matplotlib; import matplotlib.pyplot as plt
+matplotlib.rcParams.update({'figure.dpi': 110})
+print('PyTorch:', torch.__version__, '  CUDA:', torch.cuda.is_available())
+
+=== cell 3 ===
+REPO_DIR = '/kaggle/working/CMF_Unlearning'
+if not os.path.isdir(REPO_DIR):
+    sh(f'git clone https://github.com/tiensinh2/CMF_Unlearning.git {REPO_DIR}')
+else:
+    sh(f'git -C {REPO_DIR} remote set-url origin https://github.com/tiensinh2/CMF_Unlearning.git')
+    sh(f'git -C {REPO_DIR} pull origin main')
+os.chdir(REPO_DIR); sys.path.insert(0, REPO_DIR)
+result = subprocess.run(['git', '-C', REPO_DIR, 'rev-parse', 'HEAD'],
+                        capture_output=True, text=True)
+REPO_COMMIT = result.stdout.strip() or 'main'
+print('Repo commit:', REPO_COMMIT)
+
+=== cell 4 ===
+CKPT_DATASET_DIR = '/kaggle/input/datasets/kiethe/cmf-notebook1'
+_CONFIG_CANDIDATES = [
+    f'{CKPT_DATASET_DIR}/cmf_benchmark_config.json',
+    f'{CKPT_DATASET_DIR}/checkpoints/cmf_benchmark/cmf_benchmark_config.json',
+    f'{CKPT_DATASET_DIR}/cmf_benchmark/cmf_benchmark_config.json',
+]
+config_path = CKPT_ROOT_NB1 = None
+for _p in _CONFIG_CANDIDATES:
+    if os.path.exists(_p):
+        config_path = _p; CKPT_ROOT_NB1 = os.path.dirname(_p); break
+assert config_path, f'Cannot find cmf_benchmark_config.json'
+with open(config_path) as f: NB1_CFG = json.load(f)
+
+DATASET     = NB1_CFG['dataset']       # 'cifar10'
+ARCH        = NB1_CFG['arch']          # 'resnet18'
+NUM_CLASSES = NB1_CFG['num_classes']   # 10
+TEST_MODE   = NB1_CFG.get('test_mode', False)
+
+# Paper protocol: sweep all 10 classes as forget class; one seed.
+FORGET_CLASSES = list(range(NUM_CLASSES))   # [0, 1, ..., 9]
+SEEDS          = [0]
+# theta_o: single fully-trained model from NB1.
+THETA_O_SEED   = 0
+
+# CMF experiment matrix
+BASE_METHODS   = ['scrub', 'grad_ascent_descent', 'random_label', 'salun', 'tarun']
+MEAN_SOURCES   = ['train']   # paper-faithful: class means from full training set
+# Table 4: RL+CMF=4ep, SalUn+CMF=4ep, NegGrad++CMF=3ep, SCRUB+CMF=3ep, UNSIR+CMF=3ep
+CMF_EPOCHS_BY_METHOD = {
+    'random_label':        2 if TEST_MODE else 4,
+    'salun':               2 if TEST_MODE else 4,
+    'grad_ascent_descent': 1 if TEST_MODE else 3,
+    'scrub':               1 if TEST_MODE else 3,
+    'tarun':               1 if TEST_MODE else 3,
+}
+K_POSTHOC   = [2, 5, 10]
+PHASE2_DATA = ['retain_plus_forget']   # phase 2 trains on retain + forget set
+HPARAM_SOURCE = 'table4'
+
+CKPT_ROOT = '/kaggle/working/checkpoints/cmf_paper'
+os.makedirs(f'{CKPT_ROOT}/cmf_static',  exist_ok=True)
+os.makedirs(f'{CKPT_ROOT}/cmf_posthoc', exist_ok=True)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f'CMF_EPOCHS_BY_METHOD={CMF_EPOCHS_BY_METHOD}  device={device}')
+
+=== cell 5 ===
+import torchvision, torchvision.transforms as transforms
+transform_train = transforms.Compose([
+    transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+])
+transform_test = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+])
+
+# Training set ΓÇö augmented (for unlearn methods)
+full_train      = torchvision.datasets.CIFAR10('/kaggle/working/data', train=True,
+                                               download=True,  transform=transform_train)
+# Training set ΓÇö eval transform (for probe/NCC feature extraction, paper ┬º3.2 / eq.3)
+full_train_eval = torchvision.datasets.CIFAR10('/kaggle/working/data', train=True,
+                                               download=False, transform=transform_test)
+# Test set ΓÇö for ALL final metric evaluation (paper Appendix A.2)
+test_set = torchvision.datasets.CIFAR10('/kaggle/working/data', train=False,
+                                        download=True, transform=transform_test)
+
+# Pre-index test set by class label
+test_targets = torch.tensor(test_set.targets)   # [10000]
+TEST_CLASS_IDX = {
+    c: (test_targets == c).nonzero(as_tuple=True)[0].tolist()
+    for c in range(NUM_CLASSES)
+}
+
+# Pre-index training set by class label
+train_targets = torch.tensor(full_train.targets)  # [50000]
+TRAIN_CLASS_IDX = {
+    c: (train_targets == c).nonzero(as_tuple=True)[0].tolist()
+    for c in range(NUM_CLASSES)
+}
+
+print(f'Train: {len(full_train)}  Test: {len(test_set)}')
+print(f'Test samples per class: {len(TEST_CLASS_IDX[0])} (expected 1000)')
+
+=== cell 6 ===
+import argparse
+from unlearn.cmf_weights import ModelModule
+from unlearn.cmf_two_stage import CMFWeightsTrainable
+from unlearn import unlear_func
+
+# LRs for CMF variants (Table 4, PDF lines 2390ΓÇô2434)
+CMF_LR = {
+    'scrub':               5e-3,
+    'grad_ascent_descent': 1e-4,
+    'random_label':        2e-3,
+    'salun':               2e-3,
+    'tarun':               5e-5,
+}
+CMF_BATCH = {'scrub': 64}
+CMF_BATCH_DEFAULT = 128
+
+
+def make_cmf_args(base_method, lr, epochs, mean_source, forget_class, forget_train_idx,
+                  retain_train_idx, seed=0):
+    """Build args namespace for one whole-class CMF unlearning run."""
+    return argparse.Namespace(
+        dataset=DATASET, arch=ARCH, num_classes=NUM_CLASSES,
+        class_label_names=list(range(NUM_CLASSES)),
+        unlearn_method=f'{base_method}_CMF_RemoveFC',
+        unlearn_class=[forget_class],   # single class ΓÇö matches paper
+        batch_size=128, test_batch_size=256,
+        lr=lr, momentum=0.9, weight_decay=5e-4,
+        epochs_or_steps=epochs,
+        seed=seed,
+        num_retain_samples=len(retain_train_idx),
+        num_forget_samples=len(forget_train_idx),
+        grad_norm_clip=1.0,
+        SVD_alpha_r=1000, SVD_alpha_f=30, SVD_samples=900, SVD_max_patches=10000,
+        freeze_except_last=False,
+        scrub_del_bsz=64, scrub_sgda_bsz=64, scrub_msteps=2, scrub_epochs=epochs,
+        salun_threshold=0.5,
+        tarun_impair_lr=lr, tarun_samples_per_class=1000,
+        dry_run=TEST_MODE, no_cuda=False, no_mps=True, gamma=0.5,
+        data_path='/kaggle/working/data',
+        remove_FC=True, CMFClassifier=True, CMF_momentum=0.9,
+        pretrained=False, temperature=1.0,
+        prob_batch_size=256, lp_every=0,
+        mean_source=mean_source,
+        repo_commit=REPO_COMMIT, test_mode=TEST_MODE,
+    )
+
+
+def build_cmf_model(args):
+    return ModelModule(args).to(device)
+
+
+@torch.no_grad()
+def eval_acc(model, loader):
+    model.eval()
+    correct = total = 0
+    for x, y in loader:
+        correct += (model(x.to(device)).argmax(1).cpu() == y).sum().item()
+        total   += y.size(0)
+    return 100.0 * correct / max(total, 1)
+
+
+@torch.no_grad()
+def cmf_extract_features(model, loader):
+    """Extract CMF-preprocessed features: ß║æ = normalize(normalize(f) ΓêÆ ╬╝)."""
+    model.eval()
+    feats, labs = [], []
+    for x, y in loader:
+        x = x.to(device)
+        f = model.extract_features(x)
+        z = model._preprocess_feats_for_cmf(f)
+        feats.append(z.cpu()); labs.append(y)
+    return torch.cat(feats), torch.cat(labs)
+
+
+def run_probe_cmf(model, train_retain_ldr, train_forget_ldr,
+                  test_retain_ldr, test_forget_ldr, n_epochs=50):
+    """
+    Paper ┬º3.2: probe trained on ALL training features D_r Γê¬ D_f,
+    evaluated on test-set retain and test-set forget subsets.
+    """
+    Xtr, ytr = cmf_extract_features(model, train_retain_ldr)
+    Xfg, yfg = cmf_extract_features(model, train_forget_ldr)
+    Xall = torch.cat([Xtr, Xfg])
+    yall = torch.cat([ytr, yfg
+
+=== cell 7 ===
+# ΓöÇΓöÇΓöÇ 4a: cmf_static (Algorithm 2) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# Paper protocol: forget one entire class at a time, sweep all 10 classes.
+# Output/Probe/NCC evaluated on the held-out test set.
+
+# Load theta_o once (single model used as starting point for all runs)
+theta_o_path = f'{CKPT_ROOT_NB1}/pre_train/theta_o_seed{THETA_O_SEED}.pt'
+if TEST_MODE: theta_o_path = theta_o_path.replace('.pt', '_testmode.pt')
+assert os.path.exists(theta_o_path), f'Missing theta_o: {theta_o_path}'
+ck_o = torch.load(theta_o_path, map_location=device)
+theta_o_state = ck_o.get('model_state_dict', ck_o)
+
+results_4a = []
+
+for forget_class in FORGET_CLASSES:
+    for seed in SEEDS:
+
+        # ΓöÇΓöÇ Build whole-class forget / retain splits ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        forget_train_idx = TRAIN_CLASS_IDX[forget_class]           # ~5 000
+        retain_train_idx = [
+            i for c in range(NUM_CLASSES)
+            if c != forget_class
+            for i in TRAIN_CLASS_IDX[c]
+        ]                                                            # ~45 000
+
+        # Training-set loaders (augmented) ΓÇö for unlearn methods
+        retain_loader = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(full_train, retain_train_idx),
+            batch_size=128, shuffle=True, num_workers=2)
+        forget_loader = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(full_train, forget_train_idx),
+            batch_size=128, shuffle=True, num_workers=2)
+        full_train_loader = torch.utils.data.DataLoader(
+            full_train, batch_size=256, shuffle=False, num_workers=2)
+
+        # Training-set loaders (eval transform) ΓÇö for probe/NCC feature extraction
+        train_retain_eval_ldr = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(full_train_eval, retain_train_idx),
+            batch_size=256, shuffle=False, num_workers=2)
+        train_forget_eval_ldr = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(full_train_eval, forget_train_idx),
+            batch_size=256, shuffle=False, num_workers=2)
+
+        # ΓöÇΓöÇ Test-set loaders ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        test_forget_idx = TEST_CLASS_IDX[forget_class]             # 1 000
+        test_retain_idx = [
+            i for c in range(NUM_CLASSES)
+            if c != forget_class
+            for i in TEST_CLASS_IDX[c]
+        ]                                                            # 9 000
+        test_forget_ldr = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(test_set, test_forget_idx),
+            batch_size=256, shuffle=False, num_workers=2)
+        test_retain_ldr = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(test_set, test_retain_idx),
+            batch_size=256, shuffle=False, num_workers=2)
+
+        for base_method in BASE_METHODS:
+            for mean_source in MEAN_SOURCES:
+                tag = f'{base_method}_cmf_static_{mean_source}_class{forget_class}_seed{seed}'
+             
+
+=== cell 8 ===
+# ΓöÇΓöÇΓöÇ 4b: post-hoc W calibration ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# LOAD 4a checkpoint; fine-tune full model (encoder + W) with recompute_cmf each epoch.
+
+results_4b = []
+
+for forget_class in FORGET_CLASSES:
+    for seed in SEEDS:
+
+        # ΓöÇΓöÇ Rebuild splits and loaders (same as 4a) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+        forget_train_idx = TRAIN_CLASS_IDX[forget_class]
+        retain_train_idx = [
+            i for c in range(NUM_CLASSES)
+            if c != forget_class
+            for i in TRAIN_CLASS_IDX[c]
+        ]
+        retain_loader = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(full_train, retain_train_idx),
+            batch_size=128, shuffle=True, num_workers=2)
+        forget_loader = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(full_train, forget_train_idx),
+            batch_size=128, shuffle=True, num_workers=2)
+        train_retain_eval_ldr = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(full_train_eval, retain_train_idx),
+            batch_size=256, shuffle=False, num_workers=2)
+        train_forget_eval_ldr = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(full_train_eval, forget_train_idx),
+            batch_size=256, shuffle=False, num_workers=2)
+
+        test_forget_idx = TEST_CLASS_IDX[forget_class]
+        test_retain_idx = [
+            i for c in range(NUM_CLASSES)
+            if c != forget_class
+            for i in TEST_CLASS_IDX[c]
+        ]
+        test_forget_ldr = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(test_set, test_forget_idx),
+            batch_size=256, shuffle=False, num_workers=2)
+        test_retain_ldr = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(test_set, test_retain_idx),
+            batch_size=256, shuffle=False, num_workers=2)
+
+        for base_method in BASE_METHODS:
+            for mean_source in MEAN_SOURCES:
+                # Load 4a checkpoint
+                tag_4a = (f'{base_method}_cmf_static_{mean_source}_'
+                          f'class{forget_class}_seed{seed}')
+                if TEST_MODE: tag_4a += '_testmode'
+                ckpt_4a = f'{CKPT_ROOT}/cmf_static/{tag_4a}.pt'
+                if not os.path.exists(ckpt_4a):
+                    print(f'[4b] Missing 4a ckpt: {ckpt_4a} ΓÇö skipping.')
+                    continue
+
+                ck_4a = torch.load(ckpt_4a, map_location=device)
+                metrics_4a = ck_4a['metrics']
+
+                retain_set_sub = torch.utils.data.Subset(full_train, retain_train_idx)
+                forget_set_sub = torch.utils.data.Subset(full_train, forget_train_idx)
+                mean_loader = (torch.utils.data.DataLoader(
+                    full_train, batch_size=256, shuffle=False, num_workers=2)
+                    if mean_source == 'train' else retain_loader)
+
+                for k_posthoc in K_POSTHOC:
+                    for phase2_data in PHASE2_DATA:
+                        tag = (f'{base_method}_cmf_stati
+
+=== cell 9 ===
+# ΓöÇΓöÇΓöÇ Summary table: 4a vs 4b (mean ┬▒ std over all 10 forget classes) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+metric_cols = ['output_retain_acc','output_forget_acc',
+               'probe_retain_acc','probe_forget_acc','ncc_retain_acc','ncc_forget_acc']
+
+for base_method in BASE_METHODS:
+    for mean_source in MEAN_SOURCES:
+        sub4a = df_4a[(df_4a['method'] == base_method) &
+                      (df_4a['mean_source'] == mean_source)] if not df_4a.empty else pd.DataFrame()
+        sub4b = df_4b[(df_4b['method'] == base_method) &
+                      (df_4b['mean_source'] == mean_source)] if not df_4b.empty else pd.DataFrame()
+        if sub4a.empty and sub4b.empty: continue
+
+        print(f'\n=== {base_method.upper()} | mean_source={mean_source} ===')
+
+        def fmt_row(df, label):
+            row = [label]
+            for c in metric_cols:
+                if c in df.columns:
+                    v = df[c].dropna()
+                    row.append(f'{v.mean():.1f}┬▒{v.std():.1f}' if len(v) > 0 else 'N/A')
+                else:
+                    row.append('N/A')
+            return row
+
+        header = ['Variant'] + metric_cols
+        rows = [fmt_row(sub4a, 'cmf_static(4a)')]
+        for k in K_POSTHOC:
+            for ph in PHASE2_DATA:
+                s = sub4b
+                if 'k_posthoc' in s.columns:   s = s[s['k_posthoc'] == k]
+                if 'phase2_data' in s.columns: s = s[s['phase2_data'] == ph]
+                if not s.empty:
+                    rows.append(fmt_row(s, f'posthoc_k{k}_{ph}'))
+
+        print(pd.DataFrame(rows, columns=header).to_string(index=False))
+

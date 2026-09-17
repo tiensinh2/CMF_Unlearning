@@ -1,10 +1,6 @@
 import torch
-import torch.nn.functional as F
-from torch import nn
-
 from unlearn.cmf_weights import CMFWeights, ModelModule
 
-import os
 
 def CMF_fine_tuing(
     args, model, device,
@@ -12,76 +8,53 @@ def CMF_fine_tuing(
     train_loader, test_loader,
     optimizer, epochs, **kwargs
 ):
-    """CMF static unlearning (Algorithm 2).
+    """CMF static unlearning (Algorithm 2) — NB4a entry point.
 
-    train_loader is the mean_loader passed by NB4/NB5 — either the full
-    training set ('train') or retain-only ('retain') depending on mean_source.
-    recompute_cmf and the per-epoch mean update both use this same loader so
-    that mean_source='retain' correctly computes means from retain data only.
+    Delegates to run_cmf_static(), which is the SINGLE SOURCE OF TRUTH for
+    per-method Stage-1 logic.  run_cmf_static() dispatches to the correct
+    *_CMF_unlearn() function for each base_method (grad_ascent_descent,
+    random_label, salun, scrub, tarun), running exactly `epochs` epochs of:
+        recompute_cmf → freeze W → method-specific encoder update.
 
-    Bug C1 fix: recompute_cmf now uses train_loader (= mean_loader passed by
-    caller), not a hardcoded reference to the full training loader.
-    Bug C2 fix: the gradient-update loop now trains on retain_loader only,
-    never on forget-class samples.
+    Previously this function ran retain-CE-only training (ignoring
+    base_method's ascent/forget signal).  That caused cmf_adaptive's Stage 1
+    to restore NCC_f to ~94% for grad_ascent_descent and TARUN instead of
+    erasing it.  The fix is here: CMF_fine_tuing now calls run_cmf_static,
+    which always uses the correct per-method logic.
+
+    NB4a (cmf_static notebook) results are unchanged because the per-method
+    *_CMF_unlearn() functions already produced the NB4a validated results.
     """
-    from utils import test
+    from unlearn.cmf_two_stage import run_cmf_static
 
-    # Align CMF weights using mean_loader (passed as train_loader by NB4/NB5)
-    model.eval()
-    model.recompute_cmf(train_loader, device=device)
-
-    # SGD optimizer
-    optimizer = torch.optim.SGD(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=getattr(args, "lr", 1e-3),
-        momentum=getattr(args, "momentum", 0.9),
-        weight_decay=getattr(args, "weight_decay", 5e-4),
-        nesterov=True
+    # Derive base_method from args.unlearn_method (e.g. "scrub_CMF_RemoveFC" -> "scrub")
+    unlearn_method = getattr(args, "unlearn_method", "")
+    known_methods = (
+        "grad_ascent_descent", "random_label", "salun", "scrub", "tarun"
     )
-
-    # Training loop — retain_loader only (never trains on forget class)
-    model.train()
-    for epoch in range(1, epochs + 1):
-        model.train()
-        total_loss = 0.0
-        total_correct = 0
-        total_samples = 0
-
-        for x, y in retain_loader:
-            x, y = x.to(device), y.to(device)
-            optimizer.zero_grad()
-            loss, acc = model.forward_a((x, y), stage="train")
-            loss.backward()
-            optimizer.step()
-            bs = x.size(0)
-            total_loss   += loss.item() * bs
-            total_correct += float(acc.item()) * bs
-            total_samples += bs
-
-        avg_loss = total_loss / max(total_samples, 1)
-        avg_acc  = total_correct / max(total_samples, 1)
-        print(f"[Epoch {epoch}] Train Loss: {avg_loss:.4f}, Accuracy: {avg_acc:.2%}")
-
-        # Recompute CMF using mean_loader after each epoch
-        model.eval()
-        model.recompute_cmf(train_loader, device=device)
-        retain_acc, forget_acc, _ = test(
-            model, device, test_loader,
-            args.unlearn_class, args.class_label_names, args.num_classes,
-            job_name=args.unlearn_method, set_name=f"Test Set (Epoch {epoch})"
+    base_method = next(
+        (m for m in known_methods if unlearn_method.startswith(m)),
+        None
+    )
+    if base_method is None:
+        raise ValueError(
+            f"CMF_fine_tuing: cannot derive base_method from "
+            f"args.unlearn_method='{unlearn_method}'. "
+            f"Expected one of: {known_methods}"
         )
-        model.train()
 
-    # Final recompute and evaluation
-    model.eval()
-    model.recompute_cmf(train_loader, device=device)
-    retain_acc, forget_acc, _ = test(
-        model, device, test_loader,
-        args.unlearn_class, args.class_label_names, args.num_classes,
-        job_name=args.unlearn_method, set_name="Test Set (Final)"
+    test_forget_loader = kwargs.pop("test_forget_loader", None)
+
+    return run_cmf_static(
+        base_method=base_method,
+        args=args,
+        model=model,
+        device=device,
+        retain_loader=retain_loader,
+        forget_loader=forget_loader,
+        train_loader=train_loader,
+        test_loader=test_loader,
+        epochs=epochs,
+        test_forget_loader=test_forget_loader,
+        **kwargs,
     )
-    model.history_log = {
-        "retain_acc": [retain_acc],
-        "forget_acc": [forget_acc],
-    }
-    return model

@@ -12,7 +12,7 @@ from .SVD import SVD_unlearn
 from .nc_prune import prune
 from .CMF import CMF_fine_tuing as CMF_FT
 from .retrain import re_train
-from .cmf_two_stage import cmf_two_stage_unlearn, cmf_adaptive_unlearn  # Part B
+from .cmf_two_stage import cmf_two_stage_unlearn, cmf_adaptive_unlearn, run_cmf_static  # Part B
 
 # NOTE: "grad_descent" previously mapped to unlearn_naive (NegGrad+, ascent+descent).
 # This was a bug: any run with --unlearn-method grad_descent produced NegGrad+ results,

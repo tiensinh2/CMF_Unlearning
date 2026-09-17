@@ -131,6 +131,12 @@ class AblationModelModule(_BaseModelModule):
             means[mask_full] = means[mask_full] - mu
             means[mask_full] = F.normalize(means[mask_full], dim=1)
 
-        # Write back
-        self.CMFweights.weight.copy_(means)
+        # Warn if any classes were missing from the loader
+        if not mask_full.all():
+            missing_classes = (~mask_full).nonzero(as_tuple=True)[0].tolist()
+            print(f"[recompute_cmf WARNING] Classes {missing_classes} not present in loader; retaining existing weights for these classes.")
+
+        # Write back only observed class centroids to prevent NaN injection
+        if mask_full.any():
+            self.CMFweights.weight[mask_full] = means[mask_full]
         self.CMFweights.mu.copy_(mu)

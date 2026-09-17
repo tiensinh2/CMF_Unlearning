@@ -1,62 +1,28 @@
 """
-unlearn/cmf_two_stage.py — Two-stage CMF unlearning schedule.
+unlearn/cmf_two_stage.py — Two-stage CMF unlearning schedule + shared Stage-1 dispatcher.
 
-Stage 1 (epochs 1 → E-k):
-    Delegates entirely to cmf_static_unlearn (called as a black box).
-    CMF weights are recomputed closed-form after each epoch.
-    Encoder θ is updated by the base_method (ascent on forget + descent on retain).
+run_cmf_static(base_method, args, model, device, ..., epochs)
+    SINGLE SOURCE OF TRUTH for "what cmf_static Stage 1 does per base_method."
+    Dispatches to the correct *_CMF_unlearn() function for each method,
+    running exactly `epochs` epochs of: recompute_cmf + freeze W + method-specific
+    encoder update (ascent/descent / random-relabel / SCRUB-SGDA / TARUN impair+repair).
 
-Stage 2 (epochs E-k+1 → E):
-    Encoder is frozen.
-    W is promoted from buffer → trainable parameter ONCE (using Stage 1 end weights).
-    W is trained with real gradient descent (CE loss) over retain_loader
-    (or retain+forget if phase2_data='retain_plus_forget').
-    A separate checkpoint is saved at Stage 1 end and Stage 2 end.
+    Both callers use this function:
+      - CMF_fine_tuing() in unlearn/CMF.py  (NB4a cmf_static notebook path)
+      - cmf_adaptive Stage 1               (NB4b cmf_adaptive notebook path)
 
-Config params:
-    total_epochs        (E)  default 50
-    final_stage_epochs  (k)  default 3   (try k=2 and k=3)
-    phase2_data              'retain_only' | 'retain_plus_forget'
-    mean_source              'train' | 'retain'
-    base_method              method key passed to cmf_static style training
+    This guarantees exactly ONE implementation of Stage-1 logic, shared by both
+    notebooks.  Previously cmf_adaptive called CMF_fine_tuing() directly, which is
+    retain-CE-only and ignores the base_method ascent/forget signal — causing NCC_f
+    to be restored to ~94% (retain-optimal) for grad_ascent_descent and TARUN instead
+    of being erased as the base method intends.
 
-Adaptive-α blending (cmf_adaptive_unlearn) — TRUE two-stage design:
-    STAGE 1: run cmf_static_unlearn for `epochs` epochs (recompute_cmf each
-             epoch, freeze W, update encoder).  Identical to Algorithm 2.
-    STAGE 2: freeze encoder; snapshot W_CMF from Stage-1 end (no further
-             recompute).  W_learned starts from Stage-1 W_CMF and is updated
-             by gradient descent on retain set each epoch.
-             Each epoch:
-               illusion_gap = output_forget_acc - ncc_forget_acc
-               alpha        = clamp(gap / gap_scale, 0, 1)
-               W_eff        = (1-alpha)*W_learned + alpha*W_CMF_fixed
-               W_learned   ← W_eff
+cmf_two_stage_unlearn  — Budget-shared two-stage (NB5).
+cmf_adaptive_unlearn   — Adaptive-alpha blending Stage 2 on top of shared Stage 1 (NB4b).
 
-    args fields consumed:
-        gap_scale          float  — default 20.0
-        alpha_epochs       int    — Stage-2 epoch budget (default = epochs)
-        alpha_log_every    int    — print alpha / gap every N epochs (default 1)
-
-Oracle-distance early stopping (Stage 2 of cmf_adaptive_unlearn and cmf_two_stage_unlearn):
-    Stop when |ncc_forget_acc(epoch) - oracle_ncc_forget_acc| <= k_stop * oracle_std.
-    Breaks on FIRST entry — does not wait for stability.
-
-    args fields consumed:
-        oracle_ncc_forget_acc   float  — mean oracle NCC forget acc (from NB2 results)
-        oracle_ncc_forget_std   float  — std  oracle NCC forget acc (from NB2 results)
-        k_stop                  float  — tolerance multiplier (default 1.5)
-    If oracle_ncc_forget_acc is None / not set, early stopping is disabled.
-
-Checkpoint keys added by both functions:
-    early_stopped      bool
-    stopped_at_epoch   int   (None if not early-stopped)
-
-Bug fixes vs old alternating-rounds design:
-    1. Old code ran ONE batch per step then broke.  This runs full epoch passes.
-       We log n_batches_processed per epoch to confirm.
-    2. Old code deleted buffer + re-registered parameter, breaking state_dict.
-       CMFWeightsTrainable handles this cleanly; checkpoints are loadable
-       in either form (buffer or parameter).
+Oracle early stopping (Stage 2 of cmf_adaptive_unlearn):
+    Stop when |ncc_forget_acc - oracle_ncc_forget_acc| <= k_stop * oracle_ncc_forget_std.
+    Disabled when oracle_ncc_forget_acc is not set on args.
 """
 from __future__ import annotations
 
@@ -70,6 +36,145 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from unlearn.tools import apply_prep
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared Stage-1 dispatcher — SINGLE SOURCE OF TRUTH for cmf_static logic
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Map from base_method name to its CMF unlearn function.
+# Populated lazily on first call to avoid circular imports at module load time.
+_CMF_STATIC_DISPATCH: dict = {}
+
+
+def _build_dispatch() -> None:
+    """Populate _CMF_STATIC_DISPATCH once, importing each CMF variant function."""
+    if _CMF_STATIC_DISPATCH:
+        return
+    from unlearn.naive import unlearn_naive_CMF
+    from unlearn.random_label import random_label_CMF_unlearn
+    from unlearn.salun import salun_CMF_unlearn
+    from unlearn.scrub import scrub_CMF_unlearn
+    from unlearn.tarun import tarun_CMF_unlearn
+    _CMF_STATIC_DISPATCH.update({
+        "grad_ascent_descent": unlearn_naive_CMF,
+        "random_label":        random_label_CMF_unlearn,
+        "salun":               salun_CMF_unlearn,
+        "scrub":               scrub_CMF_unlearn,
+        "tarun":               tarun_CMF_unlearn,
+    })
+
+
+def run_cmf_static(
+    base_method: str,
+    args,
+    model,
+    device,
+    retain_loader,
+    forget_loader,
+    train_loader,
+    test_loader,
+    epochs: int,
+    test_forget_loader=None,
+    train_dataset=None,
+    val_index=None,
+    **kwargs,
+):
+    """Run exactly `epochs` epochs of cmf_static for `base_method`.
+
+    This is the SINGLE SOURCE OF TRUTH for what Stage 1 of both cmf_static
+    (NB4) and cmf_adaptive (NB4c) does.  It dispatches to the correct
+    *_CMF_unlearn() function — the same one NB4 uses directly — so both
+    notebooks are guaranteed to run identical Stage-1 logic.
+
+    Supported base_method values:
+        'grad_ascent_descent', 'random_label', 'salun', 'scrub', 'tarun'
+
+    The dispatched function receives args.epochs_or_steps = epochs so it runs
+    exactly the requested number of epochs, regardless of any prior value.
+
+    Returns the updated model (same object, modified in-place and returned).
+    """
+    _build_dispatch()
+    fn = _CMF_STATIC_DISPATCH.get(base_method)
+    if fn is None:
+        raise ValueError(
+            f"run_cmf_static: unknown base_method '{base_method}'. "
+            f"Supported: {list(_CMF_STATIC_DISPATCH.keys())}"
+        )
+
+    # Temporarily override epochs_or_steps so the dispatched function runs
+    # exactly `epochs` epochs regardless of any pre-existing value on args.
+    orig_eps = getattr(args, "epochs_or_steps", epochs)
+    args.epochs_or_steps = epochs
+
+    # Ensure unlearn_method tag includes the base_method name so method-
+    # specific dispatch inside (e.g. "ascent" in args.unlearn_method) works.
+    orig_method = getattr(args, "unlearn_method", "")
+    if base_method not in orig_method:
+        args.unlearn_method = f"{base_method}_CMF_RemoveFC"
+
+    call_kwargs = dict(kwargs)
+    if base_method == "tarun":
+        model = fn(
+            args=args,
+            model=model,
+            device=device,
+            retain_loader=retain_loader,
+            forget_loader=forget_loader,
+            train_loader=train_loader,
+            test_loader=test_loader,
+            train_dataset=train_dataset,
+            val_index=val_index,
+            **call_kwargs,
+        )
+    elif base_method == "scrub":
+        model = fn(
+            args=args,
+            model=model,
+            device=device,
+            retain_loader=retain_loader,
+            forget_loader=forget_loader,
+            train_loader=train_loader,
+            test_loader=test_loader,
+            **call_kwargs,
+        )
+    elif base_method == "salun":
+        model = fn(
+            args=args,
+            model=model,
+            device=device,
+            retain_loader=retain_loader,
+            forget_loader=forget_loader,
+            train_loader=train_loader,
+            test_loader=test_loader,
+            optimizer=None,
+            epochs=epochs,
+            **call_kwargs,
+        )
+    else:
+        # grad_ascent_descent, random_label
+        model = fn(
+            args=args,
+            model=model,
+            device=device,
+            retain_loader=retain_loader,
+            forget_loader=forget_loader,
+            train_loader=train_loader,
+            test_loader=test_loader,
+            optimizer=None,
+            epochs=epochs,
+            test_forget_loader=test_forget_loader,
+            **call_kwargs,
+        )
+
+    # Restore original values
+    args.epochs_or_steps = orig_eps
+    args.unlearn_method   = orig_method
+
+    return model
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -436,17 +541,22 @@ def cmf_two_stage_unlearn(
         "early_stopped": False,
     })
 
-    # ─── Stage 1: delegate to cmf_static ──────────────────────────────────
-    from unlearn.CMF import CMF_fine_tuing as cmf_static_unlearn
+    # ─── Stage 1: delegate to run_cmf_static (shared single source of truth) ──
+    _unlearn_method_s1 = getattr(args, "unlearn_method", "")
+    _known_s1 = ("grad_ascent_descent", "random_label", "salun", "scrub", "tarun")
+    base_method_s1 = next((m for m in _known_s1 if _unlearn_method_s1.startswith(m)), None)
+    if base_method_s1 is None:
+        raise ValueError(
+            f"[cmf_two_stage] cannot derive base_method from "
+            f"args.unlearn_method='{_unlearn_method_s1}'. Expected one of: {_known_s1}"
+        )
 
     print(f"\n{'='*60}")
-    print(f"[cmf_two_stage] Stage 1: running {stage1_epochs} epochs via cmf_static")
+    print(f"[cmf_two_stage] Stage 1: run_cmf_static ({base_method_s1}) — {stage1_epochs} epochs")
     print(f"{'='*60}\n")
 
-    orig_eps = getattr(args, "epochs_or_steps", epochs)
-    args.epochs_or_steps = stage1_epochs
-
-    model = cmf_static_unlearn(
+    model = run_cmf_static(
+        base_method=base_method_s1,
         args=args,
         model=model,
         device=device,
@@ -454,13 +564,12 @@ def cmf_two_stage_unlearn(
         forget_loader=forget_loader,
         train_loader=train_loader,
         test_loader=test_loader,
-        optimizer=optimizer,
         epochs=stage1_epochs,
         test_forget_loader=test_forget_loader,
-        **{k2: v for k2, v in kwargs.items()},
+        train_dataset=kwargs.get("train_dataset"),
+        val_index=kwargs.get("val_index"),
+        **{k2: v for k2, v in kwargs.items() if k2 not in ("train_dataset", "val_index")},
     )
-
-    args.epochs_or_steps = orig_eps
 
     # Capture Stage-1 history from model.history_log
     if hasattr(model, "history_log"):
@@ -593,7 +702,6 @@ def cmf_adaptive_unlearn(
         k_stop                 float  default 1.5
     """
     from utils import test
-    from unlearn.CMF import CMF_fine_tuing as cmf_static_unlearn
 
     mean_source     = getattr(args, "mean_source", "train")
     mean_loader     = train_loader if mean_source == "train" else retain_loader
@@ -605,38 +713,58 @@ def cmf_adaptive_unlearn(
     oracle_std      = getattr(args, "oracle_ncc_forget_std", None)
     k_stop          = getattr(args, "k_stop", 1.5)
 
-    print(f"[cmf_adaptive] Stage1={epochs} epochs cmf_static  |  "
-          f"Stage2={alpha_epochs} epochs adaptive-α  gap_scale={gap_scale}  "
+    # Derive base_method from args.unlearn_method
+    # (e.g. "scrub_CMF_RemoveFC" -> "scrub", "random_label_CMF_RemoveFC" -> "random_label")
+    _unlearn_method = getattr(args, "unlearn_method", "")
+    _known = ("grad_ascent_descent", "random_label", "salun", "scrub", "tarun")
+    base_method = next((m for m in _known if _unlearn_method.startswith(m)), None)
+    if base_method is None:
+        raise ValueError(
+            f"[cmf_adaptive] cannot derive base_method from "
+            f"args.unlearn_method='{_unlearn_method}'. Expected one of: {_known}"
+        )
+
+    print(f"[cmf_adaptive] base_method={base_method}  "
+          f"Stage1={epochs} epochs (run_cmf_static)  |  "
+          f"Stage2={alpha_epochs} epochs adaptive-alpha  gap_scale={gap_scale}  "
           f"mean_source={mean_source}")
     if oracle_mu is not None:
         print(f"[cmf_adaptive] oracle_stop: mu={oracle_mu:.2f} std={oracle_std:.2f} "
-              f"k_stop={k_stop} → zone=[{oracle_mu - k_stop*oracle_std:.2f}, "
+              f"k_stop={k_stop}  zone=[{oracle_mu - k_stop*oracle_std:.2f}, "
               f"{oracle_mu + k_stop*oracle_std:.2f}]")
     else:
-        print("[cmf_adaptive] oracle early-stop DISABLED")
+        print("[cmf_adaptive] oracle early-stop DISABLED (oracle_ncc_forget_acc not set)")
 
     log_rows: list         = []
     early_stopped          = False
     stopped_at_epoch: Optional[int] = None
 
     # ═══════════════════════════════════════════════════════════════════════
-    # STAGE 1: cmf_static — recompute_cmf each epoch, freeze W, update encoder
+    # STAGE 1: run_cmf_static — SHARED with NB4a cmf_static path.
+    #   Calls the correct *_CMF_unlearn() for base_method, running `epochs`
+    #   epochs of: recompute_cmf → freeze W → method-specific encoder update.
+    #   This replaces the previous CMF_fine_tuing() call which was retain-CE
+    #   only and did not apply the base_method's ascent/forget signal.
     # ═══════════════════════════════════════════════════════════════════════
     print(f"\n{'='*60}")
-    print(f"[cmf_adaptive] STAGE 1: cmf_static — {epochs} epochs")
+    print(f"[cmf_adaptive] STAGE 1: run_cmf_static ({base_method}) — {epochs} epochs")
     print(f"{'='*60}\n")
 
-    orig_eps = getattr(args, "epochs_or_steps", epochs)
-    args.epochs_or_steps = epochs
-    model = cmf_static_unlearn(
-        args=args, model=model, device=device,
-        retain_loader=retain_loader, forget_loader=forget_loader,
-        train_loader=train_loader, test_loader=test_loader,
-        optimizer=optimizer, epochs=epochs,
+    model = run_cmf_static(
+        base_method=base_method,
+        args=args,
+        model=model,
+        device=device,
+        retain_loader=retain_loader,
+        forget_loader=forget_loader,
+        train_loader=train_loader,
+        test_loader=test_loader,
+        epochs=epochs,
         test_forget_loader=test_forget_loader,
-        **{k2: v for k2, v in kwargs.items()},
+        train_dataset=kwargs.get("train_dataset"),
+        val_index=kwargs.get("val_index"),
+        **{k2: v for k2, v in kwargs.items() if k2 not in ("train_dataset", "val_index")},
     )
-    args.epochs_or_steps = orig_eps
 
     # Capture Stage-1 history
     if hasattr(model, "history_log"):
@@ -654,7 +782,7 @@ def cmf_adaptive_unlearn(
             })
 
     # ── Snapshot W_CMF at Stage-1 end (fixed for all of Stage 2) ────────
-    # CMF_fine_tuing already ends with recompute_cmf — W is current, just clone it.
+    # run_cmf_static already ends with recompute_cmf — W is current, just clone it.
     W_cmf_fixed = model.CMFweights.weight.detach().clone()   # [K, D] — frozen
 
     # ═══════════════════════════════════════════════════════════════════════

@@ -300,8 +300,7 @@ def unlearn_naive_CMF(
         # End-of-epoch evaluation
         # -------------------------
         model.eval()
-        Wn, Hn, G_WW, G_HH, G_WH = model.recompute_cmf(train_loader, device=device)
-        #G_WW_list.append(G_WW); G_HH_list.append(G_HH); G_WH_list.append(G_WH)
+        model.recompute_cmf(train_loader, device=device)
 
         # Classifier evaluation\
         with torch.no_grad():

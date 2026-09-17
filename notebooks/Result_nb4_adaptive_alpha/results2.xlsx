@@ -1,0 +1,3 @@
+method,mean_source,output_retain_acc_mean,output_retain_acc_std,output_forget_acc_mean,output_forget_acc_std,probe_retain_acc_mean,probe_retain_acc_std,probe_forget_acc_mean,probe_forget_acc_std,ncc_retain_acc_mean,ncc_retain_acc_std,ncc_forget_acc_mean,ncc_forget_acc_std
+grad_ascent_descent,train,94.49,0.4,93.67,3.67,94.48,0.41,93.78,3.62,94.49,0.41,93.66,3.67
+scrub,train,94.5,0.64,59.33,9.21,94.46,0.58,73.6,7.24,94.5,0.64,61.02,9.1

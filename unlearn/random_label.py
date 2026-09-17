@@ -1407,12 +1407,7 @@ def random_label_CMF_unlearn(
         # ---- 4.3 evaluate + useactually/reallabel CMF classifier ----
         model.eval()
         # key：thisinuse train_loader 's/of【actually/reallabel】intoline/executeclassaveragevalue/
-        Wn, Hn, G_WW, G_HH, G_WH = model.recompute_cmf(train_loader, device=device)
-        Wn_list.append(Wn)
-        Hn_list.append(Hn)
-        G_WW_list.append(G_WW)
-        G_HH_list.append(G_HH)
-        G_WH_list.append(G_WH)
+        model.recompute_cmf(train_loader, device=device)
 
         print(f"[Epoch {epoch}] Evaluating after CMF update...")
         retain_acc, forget_acc, metric = test(
@@ -1701,12 +1696,7 @@ def random_label_once_CMF_unlearn(
 
         # ---- 4.3 CMF morenew + test ----
         model.eval()
-        Wn, Hn, G_WW, G_HH, G_WH = model.recompute_cmf(train_loader, device=device)
-        Wn_list.append(Wn)
-        Hn_list.append(Hn)
-        G_WW_list.append(G_WW)
-        G_HH_list.append(G_HH)
-        G_WH_list.append(G_WH)
+        model.recompute_cmf(train_loader, device=device)
 
         print(f"[Epoch {epoch}] Evaluating after CMF update...")
         retain_acc, forget_acc, metric = test(

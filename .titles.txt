@@ -1,0 +1,6 @@
+﻿01_train_full: # Notebook 1 ΓÇö Train ╬ÿ_o + Generate Forget/Retain Splits
+01b_eval_ncc: # Notebook 1b ΓÇö Evaluate ╬ÿ_o: Output / Linear Probe / NCC
+02_retrain_oracle: # Notebook 2 ΓÇö Oracle Retrain on Retain Set (Paper Protocol)
+03_unlearn_no_cmf: # Notebook 3 ΓÇö Non-CMF Unlearning Baselines (Paper Protocol)
+04_unlearn_cmf: # Notebook 4 ΓÇö CMF Unlearning: cmf_static (4a) + Post-Hoc Full Fine-Tune (4b)
+05_unlearn_cmf_budget_shared: # Notebook 5 ΓÇö CMF Budget-Shared Two-Stage Unlearning (Paper Protocol)

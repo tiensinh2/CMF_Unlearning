@@ -1,0 +1,4 @@
+method,mean_source,output_retain_acc_mean,output_retain_acc_std,output_forget_acc_mean,output_forget_acc_std,probe_retain_acc_mean,probe_retain_acc_std,probe_forget_acc_mean,probe_forget_acc_std,ncc_retain_acc_mean,ncc_retain_acc_std,ncc_forget_acc_mean,ncc_forget_acc_std
+random_label,train,94.74,0.56,69.94,10.64,94.7,0.52,78.13,8.23,94.74,0.56,70.86,10.39
+salun,train,94.75,0.56,69.93,10.66,94.71,0.54,78.23,8.27,94.75,0.56,70.88,10.44
+tarun,train,94.33,0.36,94.97,3.25,94.34,0.36,94.9,3.26,94.34,0.36,94.89,3.25
