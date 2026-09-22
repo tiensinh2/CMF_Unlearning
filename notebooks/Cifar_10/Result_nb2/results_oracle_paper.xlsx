@@ -1,0 +1,2 @@
+output_retain_acc,output_forget_acc,probe_retain_acc,probe_forget_acc,ncc_retain_acc,ncc_forget_acc,model,forget_class,seed,wall_clock_minutes,early_stopped_at,n_forget_train,n_retain_train,protocol
+92.38888888888889,0.0,90.92222452163696,87.40000128746033,90.84444642066956,67.29999780654907,oracle,9,0,79.39728535811106,127,5000,45000,whole_class_single

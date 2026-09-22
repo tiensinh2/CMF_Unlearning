@@ -8,18 +8,19 @@ Official GitHub: https://github.com/ycgao1/CMF_Unlearning
 
 SOURCE PRIORITY (strict, no tie-breaking)
 =========================================
-  1. Table 4 (Appendix D.1, PDF lines 2307–2434) — primary source for every
-     method's LR, epochs, batch size, and method-specific flags (SVD α_r/α_f,
-     UNSIR LR, SCRUB msteps, etc.).  Values are transcribed verbatim.
-  2. §A.4 text — ONLY for parameters Table 4 does not cover.
+  1. Shell script run_resnet_18_CMF_unlearning.sh — primary source for CMF
+     variant LRs, specifically the single-class vs multi-class split that
+     Table 4 does not expose.  This script produced the paper Table 3 results.
+  2. Table 4 (Appendix D.1, PDF lines 2307–2434) — primary source for all
+     non-CMF method LRs, epochs, batch size, and method-specific flags
+     (SVD α_r/α_f, UNSIR LR, SCRUB msteps, etc.).  For CMF methods, Table 4
+     lists only one LR per dataset column which corresponds to the multi-class
+     value; single-class values come from the shell script (source 1 above).
+  3. §A.4 text — ONLY for parameters neither source covers.
      Exception: Table 4 DOES list the original CIFAR-10 training LR (0.01),
      so Table 4 takes precedence over §A.4's 5×10⁻² for that parameter.
-  3. Standard ResNet-18/CIFAR defaults — ONLY when neither Table 4 nor §A.4
-     specify a value; always explicitly labeled "standard default".
-
-Shell scripts (script/run/) are NOT a reference source.  The three ResNet
-shell scripts (run_resnet_unlearning.sh, run_resnet_18_CMF_unlearning.sh,
-run_resnet_retrain.sh) have been deleted from the working copy.
+  4. Standard ResNet-18/CIFAR defaults — ONLY when no other source specifies;
+     always explicitly labeled "standard default".
 
 PART A FIX REPORT
 =================
@@ -245,30 +246,36 @@ UNLEARN_LR: Dict[str, Dict[str, Dict[str, float]]] = {
         "cifar100":     {"single": 0.0,  "multi": 0.0},
         "tinyimagenet": {"single": 0.0,  "multi": 0.0},
     },
-    # ── CMF variants ── (Table 4; no single/multi distinction in the table)
-    # Random Label + CMF: CIFAR-10=2×10⁻³, CIFAR-100=2×10⁻³, Tiny=1×10⁻²
+    # ── CMF variants ── (shell script run_resnet_18_CMF_unlearning.sh is authoritative
+    # for single vs multi split; Table 4 only lists one value per dataset and appears
+    # to show the multi-class value.  Shell values are what produced paper Table 3.)
+    #
+    # Random Label + CMF:
+    #   shell: cifar10 single=1e-4, multi=2e-3  ← Table 4 shows 2e-3 (multi only)
     "random_label_CMF_RemoveFC": {
-        "cifar10":      {"single": 2e-3,  "multi": 2e-3},   # Table 4 line 2390
-        "cifar100":     {"single": 2e-3,  "multi": 2e-3},   # Table 4 line 2393
-        "tinyimagenet": {"single": 1e-2,  "multi": 1e-2},   # Table 4 line 2396
+        "cifar10":      {"single": 1e-4,  "multi": 2e-3},   # shell line; Table 4 line 2390 (multi)
+        "cifar100":     {"single": 2e-3,  "multi": 2e-3},   # shell = Table 4 line 2393
+        "tinyimagenet": {"single": 1e-2,  "multi": 1e-2},   # shell = Table 4 line 2396
     },
-    # SalUn + CMF: CIFAR-10=2×10⁻³, CIFAR-100=2×10⁻³, Tiny=1×10⁻²
+    # SalUn + CMF:
+    #   shell: cifar10 single=2e-4, multi=2e-3  ← Table 4 shows 2e-3 (multi only)
     "salun_CMF_RemoveFC": {
-        "cifar10":      {"single": 2e-3,  "multi": 2e-3},   # Table 4 line 2399
-        "cifar100":     {"single": 2e-3,  "multi": 2e-3},   # Table 4 line 2402
-        "tinyimagenet": {"single": 1e-2,  "multi": 1e-2},   # Table 4 line 2405
+        "cifar10":      {"single": 2e-4,  "multi": 2e-3},   # shell line; Table 4 line 2399 (multi)
+        "cifar100":     {"single": 2e-3,  "multi": 2e-3},   # shell = Table 4 line 2402
+        "tinyimagenet": {"single": 1e-2,  "multi": 1e-2},   # shell = Table 4 line 2405
     },
-    # NegGrad+ + CMF: CIFAR-10=1×10⁻⁴, CIFAR-100=1×10⁻⁴, Tiny=3×10⁻⁵
+    # NegGrad+ + CMF: shell matches Table 4 exactly
     "grad_ascent_descent_CMF_RemoveFC": {
-        "cifar10":      {"single": 1e-4,  "multi": 1e-4},   # Table 4 line 2408
-        "cifar100":     {"single": 1e-4,  "multi": 1e-4},   # Table 4 line 2411
-        "tinyimagenet": {"single": 3e-5,  "multi": 3e-5},   # Table 4 line 2414
+        "cifar10":      {"single": 1e-4,  "multi": 1e-4},   # shell = Table 4 line 2408
+        "cifar100":     {"single": 1e-4,  "multi": 1e-4},   # shell = Table 4 line 2411
+        "tinyimagenet": {"single": 3e-5,  "multi": 3e-5},   # shell = Table 4 line 2414
     },
-    # SCRUB + CMF: CIFAR-10=5×10⁻³, CIFAR-100=5×10⁻³, Tiny=1×10⁻³; batch=64
+    # SCRUB + CMF:
+    #   shell: cifar10 single=5e-3, multi=1e-3  ← Table 4 shows 5e-3 (single only)
     "scrub_CMF_RemoveFC": {
-        "cifar10":      {"single": 5e-3,  "multi": 5e-3},   # Table 4 line 2417
-        "cifar100":     {"single": 5e-3,  "multi": 5e-3},   # Table 4 line 2420
-        "tinyimagenet": {"single": 1e-3,  "multi": 1e-3},   # Table 4 line 2423
+        "cifar10":      {"single": 5e-3,  "multi": 1e-3},   # shell line; Table 4 line 2417 (single)
+        "cifar100":     {"single": 5e-3,  "multi": 5e-3},   # shell = Table 4 line 2420
+        "tinyimagenet": {"single": 1e-3,  "multi": 1e-3},   # shell = Table 4 line 2423
     },
     # UNSIR + CMF: CIFAR-10=5×10⁻⁵, CIFAR-100=5×10⁻⁵, Tiny=2×10⁻⁵
     "tarun_CMF_RemoveFC": {
@@ -338,12 +345,21 @@ UNLEARN_EXTRA: Dict[str, dict] = {
 
 
 # ─────────────────────────────────────────────────────────────
-# VALUE CHANGE LOG — shell-deprecated → Table-4
-# Records every value that changed when we dropped shell scripts.
-# Checkpoints produced under shell-derived values carry
-#   hparam_source="shell_deprecated" in their metadata.
+# CHANGE LOG — corrections made after upstream shell audit
+#
+# shell script run_resnet_18_CMF_unlearning.sh is the authoritative
+# source for SINGLE vs MULTI split within a dataset.  Table 4 lists
+# one value per dataset column and appears to show the multi-class LR.
+# Paper Table 3 (single-class CIFAR-10) results were produced with
+# the shell-script single-class values.
+#
+# NON-CMF methods (random_label, salun, neggrad, scrub, tarun):
+#   Shell run_resnet_unlearning.sh values differ from Table 4 — we use
+#   Table 4 as authoritative (those methods have no single/multi split
+#   in the shell, and Table 4 matches common sense for no-CMF runs).
 # ─────────────────────────────────────────────────────────────
 SHELL_TO_TABLE4_CHANGES: Dict[str, dict] = {
+    # ── Non-CMF corrections (Table 4 overrides old shell) ──────────────
     "pretrain_lr_cifar10": {
         "old_shell_derived": "5e-2 (§A.4 text, no pre-train shell)",
         "new_table4":        1e-2,   # Table 4 line 2308: 0.01
@@ -385,25 +401,33 @@ SHELL_TO_TABLE4_CHANGES: Dict[str, dict] = {
         "new_table4":        30,     # Table 4 line 2375
         "source_citation":   "Table 4, line 2375",
     },
-    "random_label_cmf_lr_cifar10": {
-        "old_shell_derived": "1e-4 (single-class shell value)",
-        "new_table4":        2e-3,   # Table 4 line 2390 (no single/multi split)
-        "source_citation":   "Table 4, line 2390",
+    # ── CMF corrections (shell overrides what we had as "Table 4") ──────
+    # Table 4 single column per dataset = multi-class LR.
+    # Single-class LR comes from shell script (authoritative for Table 3).
+    "random_label_cmf_lr_cifar10_single": {
+        "was_wrong":       2e-3,   # previously set from Table 4 col (=multi value)
+        "corrected_shell": 1e-4,   # shell: LR[random_label_CMF_RemoveFC|cifar10|single]=1e-4
+        "source_citation": "script/run/run_resnet_18_CMF_unlearning.sh",
     },
-    "salun_cmf_lr_cifar10": {
-        "old_shell_derived": "2e-4 (single-class shell value)",
-        "new_table4":        2e-3,   # Table 4 line 2399
-        "source_citation":   "Table 4, line 2399",
+    "salun_cmf_lr_cifar10_single": {
+        "was_wrong":       2e-3,   # previously set from Table 4 col (=multi value)
+        "corrected_shell": 2e-4,   # shell: LR[salun_CMF_RemoveFC|cifar10|single]=2e-4
+        "source_citation": "script/run/run_resnet_18_CMF_unlearning.sh",
     },
-    "scrub_cifar100_multi_lr": {
-        "old_shell_derived": "3e-4 (shell multi value)",
-        "new_table4":        1e-3,   # Table 4 line 2360 (one value per dataset)
-        "source_citation":   "Table 4, line 2360",
+    "scrub_cmf_lr_cifar10_multi": {
+        "was_wrong":       5e-3,   # previously set equal to single-class value
+        "corrected_shell": 1e-3,   # shell: LR[scrub_CMF_RemoveFC|cifar10|multi]=1e-3
+        "source_citation": "script/run/run_resnet_18_CMF_unlearning.sh",
     },
     "neggrad_cifar100_lr": {
         "old_shell_derived": "5e-5 (single) / 1e-4 (multi) from shell",
         "new_table4":        5e-3,   # Table 4 line 2351
         "source_citation":   "Table 4, line 2351",
+    },
+    "scrub_cifar100_multi_lr": {
+        "old_shell_derived": "3e-4 (old shell multi value)",
+        "new_table4":        1e-3,   # Table 4 line 2360 (one value per dataset)
+        "source_citation":   "Table 4, line 2360",
     },
 }
 

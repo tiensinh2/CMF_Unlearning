@@ -307,6 +307,10 @@ def salun_CMF_unlearn(
         weight_decay=args.weight_decay, nesterov=True
     )
 
+    # LR scheduler: StepLR(step_size=3, gamma=0.2) matches the upstream
+    # ycgao1/CMF_Unlearning repo exactly and produced the paper Table 3 results.
+    # With 4 epochs, this fires once (after epoch 3) cutting LR 2e-4→4e-5 for
+    # the final epoch, giving more conservative convergence on epoch 4.
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.2)
 
     clip = getattr(args, "grad_norm_clip", None)
