@@ -53,13 +53,15 @@ def unlearn_naive(args, model, device, retain_loader, forget_loader, train_loade
                 output = model(data_f)
                 loss = -1.0 * F.cross_entropy(output, target_f)
                 loss.backward()
-                if clip is not None:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             if "descent" in method:
                 data, target = data.to(device), target.to(device)
                 output = model(data)
                 loss = F.cross_entropy(output, target)
                 loss.backward()
+            # clip after ALL backward passes so both ascent and descent
+            # gradients are clipped together (Table 4: grad-clip=1.0)
+            if clip is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             optimizer.step()
             if args.dry_run:
                 break
