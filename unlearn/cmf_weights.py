@@ -72,6 +72,39 @@ class CMFWeights(nn.Module):
         return F.normalize(self.weight) if do_norm else self.weight
     
 
+class CMFWeightsTrainable:
+    """
+    Thin wrapper that promotes a CMFWeights buffer to a trainable nn.Parameter
+    for post-hoc classifier-only fine-tuning (NB04b / NB04c).
+
+    Usage:
+        tw = CMFWeightsTrainable(model.CMFweights)
+        tw.promote()                              # buffer -> Parameter
+        optim = SGD([tw.W_param], lr=...)
+        logits = tw(z, temperature)               # z @ W_param.T * temp
+        optim.step()
+        tw.sync_back()                            # write updated W back to buffer
+    """
+
+    def __init__(self, cmf_weights: CMFWeights):
+        self.cmf = cmf_weights
+        self.W_param: torch.nn.Parameter = None
+
+    def promote(self):
+        """Copy the frozen buffer into a leaf Parameter."""
+        W = self.cmf.weight.detach().clone().float()
+        self.W_param = torch.nn.Parameter(W)
+
+    def sync_back(self):
+        """Write the trained Parameter back into the CMFWeights buffer."""
+        with torch.no_grad():
+            self.cmf.weight.copy_(self.W_param.data)
+
+    def __call__(self, z: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
+        """Compute logits: z @ W_param.T * temperature."""
+        return (z @ self.W_param.t()) * temperature
+
+
 class ModelModule(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
