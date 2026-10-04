@@ -286,7 +286,9 @@ def unlearn_naive_CMF(
     # Hyperparameters for loss
     # -------------------------
     lam        = getattr(args, "align_coef",       0.0)
-    alpha      = getattr(args, "forget_scale",     0.5)
+    # Paper NegGrad+: ascent and descent are equally weighted (scale=1.0).
+    # Default was 0.5 which halved the ascent loss and caused retain collapse.
+    alpha      = getattr(args, "forget_scale",     1.0)
     use_margin = getattr(args, "use_margin_forget", False)
     margin     = getattr(args, "forget_margin",    0.0)
     beta_m     = getattr(args, "beta_margin",      0.0)
